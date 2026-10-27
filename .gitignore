@@ -1,0 +1,25 @@
+# Gradle / build output
+.gradle/
+.kotlin/
+build/
+**/build/
+
+# Local machine config (SDK path, never commit)
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Signing keys & secrets
+*.jks
+*.keystore
+google-services.json
+
+# OS / Python
+.DS_Store
+Thumbs.db
+__pycache__/
