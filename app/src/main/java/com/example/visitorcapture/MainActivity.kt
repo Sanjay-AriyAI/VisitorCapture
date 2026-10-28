@@ -30,6 +30,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -49,10 +50,13 @@ import java.util.*
 val CUSTOMER_TYPES = listOf("OEM", "End User", "Agent", "Distributor")
 val MARKET_EXPOSURE = listOf("Domestic Visitor", "International Visitor")
 val PRODUCTS = listOf("Mechanical Spares", "Electronics Spares", "Retrofits", "Other Products")
-val STEP_LABELS = listOf("Scan", "Details", "Customer", "Products", "Done")
+val LEAD_OUTCOMES = listOf("Product Enquiry", "Sample Request", "Spare Parts Requirement", "Order", "Factory Visit", "Follow-up")
+val REMARK_OPTIONS = listOf("Call Back", "Factory Visit", "Need Follow-up", "Others")
+val FOLLOW_UP_ACTIONS = listOf("Send Quotation", "Schedule Factory Visit", "Automatic E-mail Reminder", "Remarks")
+val STEP_LABELS = listOf("Scan", "Details", "Customer", "Products", "Outcome", "Done")
 
 enum class Screen(val step: Int) {
-    Login(-1), Welcome(0), Capture(0), Processing(0), Details(1), Customer(2), Products(3), Catalog(3), Done(4)
+    Login(-1), Welcome(0), Capture(0), Processing(0), Details(1), Customer(2), Products(3), Catalog(3), LeadOutcome(4), Done(5)
 }
 
 data class Form(
@@ -60,8 +64,14 @@ data class Form(
     val phone: String = "", val email: String = "",
     val address: String = "", val state: String = "", val country: String = "",
     val customerType: String? = null, val marketExposure: String? = null,
-    val products: Set<String> = emptySet(), val otherDetail: String = ""
-)
+    val products: Set<String> = emptySet(), val otherDetail: String = "",
+    val outcomes: Set<String> = emptySet(), val notes: String = "",
+    val remark: String? = null, val remarkOther: String = "",
+    val followUpAction: String? = null, val followUpAt: Long = 0L, val followUpNote: String = ""
+) {
+    /** The follow-up section is only shown (and saved) for these outcomes. */
+    val needsFollowUp get() = "Factory Visit" in outcomes || "Follow-up" in outcomes
+}
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -157,6 +167,8 @@ fun App() {
         val at = if (visitStart > 0L) visitStart else System.currentTimeMillis()   // date and time of the visit
         loggedAt = at
         val e = employee
+        // Fields of hidden sections are dropped, so a changed mind never leaves stale values behind.
+        val follow = if (form.needsFollowUp) form.followUpAction else null
         val v = Visitor(uid = UUID.randomUUID().toString(), deviceName = deviceName,
             name = form.name, title = form.title, company = form.company, email = form.email, phone = form.phone,
             address = form.address.trim(), state = form.state.trim(), country = form.country.trim(),
@@ -165,7 +177,13 @@ fun App() {
             otherDetail = form.otherDetail, cardPhotoPath = if (photoTaken) photoFile?.absolutePath else null,
             createdAt = at,
             attendedByKey = e?.key.orEmpty(), attendedByName = e?.name.orEmpty(), attendedByTitle = e?.title.orEmpty(),
-            attendedByEmail = e?.email.orEmpty(), attendedByPhone = e?.phone.orEmpty())
+            attendedByEmail = e?.email.orEmpty(), attendedByPhone = e?.phone.orEmpty(),
+            leadOutcomes = LEAD_OUTCOMES.filter { it in form.outcomes }.joinToString("; "),
+            discussionNotes = form.notes.trim(), remarks = form.remark.orEmpty(),
+            remarksOther = if (form.remark == "Others") form.remarkOther.trim() else "",
+            followUpAction = follow.orEmpty(),
+            followUpAt = if (follow != null && follow != "Remarks") form.followUpAt else 0L,
+            followUpNote = if (follow == "Remarks") form.followUpNote.trim() else "")
         lastUid = v.uid; extraNote = ""; extraSaved = ""
         scope.launch { db.dao().insert(v) }
     }
@@ -208,6 +226,7 @@ fun App() {
             Screen.Customer -> screen = Screen.Details
             Screen.Products -> screen = Screen.Customer
             Screen.Catalog -> screen = Screen.Products
+            Screen.LeadOutcome -> screen = Screen.Products
             Screen.Done -> reset()
             else -> {}
         }
@@ -334,13 +353,16 @@ fun App() {
                                     modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
                             NavRow(
                                 { SecondaryButton("Back") { screen = Screen.Customer } },
-                                { PrimaryButton("Finish") { save(); screen = Screen.Done } })
+                                { PrimaryButton("Continue") { screen = Screen.LeadOutcome } })
                         }
 
                         Screen.Catalog -> CatalogScreen(catalogProduct, form.products,
                             onToggle = { p -> form = form.copy(products = if (p in form.products) form.products - p else form.products + p) },
                             onSetMany = { ps, on -> form = form.copy(products = if (on) form.products + ps else form.products - ps.toSet()) },
                             onDone = { screen = Screen.Products })
+
+                        Screen.LeadOutcome -> LeadOutcomeScreen(form, { form = it }, employee,
+                            onBack = { screen = Screen.Products }, onFinish = { save(); screen = Screen.Done })
 
                         Screen.Done -> Centered {
                             val first = form.name.split(" ").firstOrNull().orEmpty()
@@ -462,6 +484,14 @@ fun AdminPanel(visitors: List<Visitor>, deviceName: String, onDeviceName: (Strin
                         Text(Catalog.summarize(v.products.split("; ").filter { it.isNotBlank() }), fontSize = 12.sp, color = Amber)
                         if (v.otherDetail.isNotBlank()) Text(v.otherDetail, fontSize = 12.sp, color = LineDim)
                         if (v.additionalInterest.isNotBlank()) Text("Also interested in: " + v.additionalInterest, fontSize = 12.sp, color = LineDim)
+                        if (v.leadOutcomes.isNotBlank()) Text("Outcome: " + v.leadOutcomes.replace("; ", " · "), fontSize = 12.sp, color = Amber)
+                        val remark = if (v.remarks == "Others" && v.remarksOther.isNotBlank()) "Others: ${v.remarksOther}" else v.remarks
+                        if (remark.isNotBlank()) Text("Remarks: $remark", fontSize = 12.sp, color = LineDim)
+                        val follow = listOf(v.followUpAction, if (v.followUpAt > 0) fmt.format(Date(v.followUpAt)) else "", v.followUpNote)
+                            .filter { it.isNotBlank() }.joinToString(" · ")
+                        if (follow.isNotBlank()) Text("Follow-up: $follow", fontSize = 12.sp, color = LineDim)
+                        if (v.discussionNotes.isNotBlank())
+                            Text(v.discussionNotes, fontSize = 12.sp, color = LineDim, maxLines = 3, overflow = TextOverflow.Ellipsis)
                     }
                     IconButton({ onDelete(v) }) { Icon(Icons.Default.Delete, "Delete", tint = Steel) }
                 }

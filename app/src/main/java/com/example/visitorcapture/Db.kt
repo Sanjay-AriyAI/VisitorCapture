@@ -31,7 +31,15 @@ data class Visitor(
     val attendedByName: String = "",
     val attendedByTitle: String = "",
     val attendedByEmail: String = "",
-    val attendedByPhone: String = ""
+    val attendedByPhone: String = "",
+    // lead outcome & follow-up, recorded by staff on the Outcome step
+    val leadOutcomes: String = "",      // selected outcomes joined with "; "
+    val discussionNotes: String = "",
+    val remarks: String = "",           // Call Back | Factory Visit | Need Follow-up | Others
+    val remarksOther: String = "",      // free text when remarks is "Others"
+    val followUpAction: String = "",    // Send Quotation | Schedule Factory Visit | Automatic E-mail Reminder | Remarks
+    val followUpAt: Long = 0,           // follow-up date and time (epoch ms), 0 if none
+    val followUpNote: String = ""       // free text when followUpAction is "Remarks"
 )
 
 /** Staff who have logged in on this phone by scanning their vCard QR code. */
@@ -105,7 +113,17 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
-@Database(entities = [Visitor::class, Employee::class], version = 4, exportSchema = false)
+/** v4 -> v5: lead outcome, discussion notes, remarks and follow-up, captured on the Outcome step. */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        listOf("leadOutcomes", "discussionNotes", "remarks", "remarksOther", "followUpAction", "followUpNote").forEach {
+            db.execSQL("ALTER TABLE visitors ADD COLUMN `$it` TEXT NOT NULL DEFAULT ''")
+        }
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `followUpAt` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+@Database(entities = [Visitor::class, Employee::class], version = 5, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): VisitorDao
     abstract fun employeeDao(): EmployeeDao
@@ -113,7 +131,7 @@ abstract class AppDb : RoomDatabase() {
         @Volatile private var inst: AppDb? = null
         fun get(c: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(c.applicationContext, AppDb::class.java, "visitors.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build().also { inst = it }
         }
     }

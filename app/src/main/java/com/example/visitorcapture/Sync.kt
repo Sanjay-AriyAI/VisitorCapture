@@ -16,7 +16,9 @@ object Sync {
     private val HEADERS = listOf("UID", "Device", "VisitDate", "VisitTime", "VisitedAt", "TimestampMs",
         "Name", "Title", "Company", "Phone", "Email", "Address", "State", "Country",
         "CustomerType", "MarketExposure", "Products", "OtherDetail", "AdditionalInterest",
-        "AttendedBy", "AttendedByTitle", "AttendedByEmail", "AttendedByPhone", "AttendedByKey", "Photo")
+        "AttendedBy", "AttendedByTitle", "AttendedByEmail", "AttendedByPhone", "AttendedByKey",
+        "LeadOutcome", "DiscussionNotes", "Remarks", "RemarksOther",
+        "FollowUpAction", "FollowUpDate", "FollowUpAtMs", "FollowUpNote", "Photo")
 
     private fun q(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
 
@@ -26,6 +28,7 @@ object Sync {
         val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
         val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.US)
         val isoFmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
+        val followFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
         val sb = StringBuilder(HEADERS.joinToString(",")).append("\n")
         list.forEach { v ->
             val at = Date(v.createdAt)
@@ -33,6 +36,9 @@ object Sync {
                 v.name, v.title, v.company, v.phone, v.email, v.address, v.state, v.country,
                 v.customerType, v.marketExposure, v.products, v.otherDetail, v.additionalInterest,
                 v.attendedByName, v.attendedByTitle, v.attendedByEmail, v.attendedByPhone, v.attendedByKey,
+                v.leadOutcomes, v.discussionNotes, v.remarks, v.remarksOther, v.followUpAction,
+                if (v.followUpAt > 0) followFmt.format(Date(v.followUpAt)) else "",
+                if (v.followUpAt > 0) v.followUpAt.toString() else "", v.followUpNote,
                 if (hasPhoto(v)) "photos/${v.uid}.jpg" else "").joinToString(",") { q(it) }).append("\n")
         }
         return sb.toString()
@@ -118,7 +124,11 @@ object Sync {
                 cardPhotoPath = photo, createdAt = g(r, "TimestampMs").toLongOrNull() ?: System.currentTimeMillis(),
                 attendedByKey = g(r, "AttendedByKey"), attendedByName = g(r, "AttendedBy"),
                 attendedByTitle = g(r, "AttendedByTitle"), attendedByEmail = g(r, "AttendedByEmail"),
-                attendedByPhone = g(r, "AttendedByPhone"))
+                attendedByPhone = g(r, "AttendedByPhone"),
+                leadOutcomes = g(r, "LeadOutcome"), discussionNotes = g(r, "DiscussionNotes"),
+                remarks = g(r, "Remarks"), remarksOther = g(r, "RemarksOther"),
+                followUpAction = g(r, "FollowUpAction"), followUpAt = g(r, "FollowUpAtMs").toLongOrNull() ?: 0L,
+                followUpNote = g(r, "FollowUpNote"))
             if (dao.insert(v) == -1L) skipped++ else added++
         }
         return added to skipped
