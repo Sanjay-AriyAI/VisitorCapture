@@ -26,7 +26,8 @@ Top progress rail: Scan - Details - Customer - Products - Outcome - Done. Gear i
   CSV column `AdditionalInterest`). It saves itself shortly after typing stops, and typing keeps the screen open (30 s after the last keystroke
   instead of 15 s).
 - Lead outcome & follow-up, filled in by staff on the Outcome screen (Finish needs at least one outcome):
-  - Lead outcome, any of Product Enquiry / Sample Request / Spare Parts Requirement / Order / Factory Visit / Follow-up.
+  - Purpose of visit (shown as the screen heading), any of Product Enquiry / Sample Request / General Enquiry / Order /
+    Factory Visit / Follow-up. Visitors saved before the rename keep "Spare Parts Requirement" in their record.
     Column `leadOutcomes` (joined with "; "), CSV column `LeadOutcome`.
   - Discussion notes, typed. Column `discussionNotes`, CSV `DiscussionNotes`.
   - Remarks: Call Back / Factory Visit / Need Follow-up / Others, with free text for Others. Columns `remarks`, `remarksOther`,
@@ -49,7 +50,12 @@ Top progress rail: Scan - Details - Customer - Products - Outcome - Done. Gear i
 ## Products
 Products -> tap Mechanical Spares / Electronics Spares / Retrofits -> expand a machine -> tick any number of makes, models
 or retrofit kits (catalogue lives in `Catalog.kt`, easy to edit). Each selection is stored as a path such as
-`Retrofits > Carding > Retrofit > HMI conversion`, so the CSV can be filtered by product, machine, make or kit.
+`Retrofits > Carding > LMW > HMI conversion`, so the CSV can be filtered by product, machine, make or kit.
+Retrofits list the kits separately for each make, following the "Retrofits Spare parts (per-machine cascading)" sheet; a make
+with no kit listed yet shows a single chip with its name.
+Other Products opens the same kind of screen with one card per spare part (Carding Belts, Ceramic Scissors, Direct Coupling,
+HMI Conversion; list in `Catalog.kt`). Tapping a card ticks it, stored as e.g. `Other Products > Carding Belts`; once one is
+ticked a free-text box appears on the Products screen.
 
 ## Database versions
 v2 adds the address fields, the attended-by columns and the `employees` table (`MIGRATION_1_2`). v3 adds

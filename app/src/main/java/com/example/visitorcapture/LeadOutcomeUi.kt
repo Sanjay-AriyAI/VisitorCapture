@@ -24,14 +24,14 @@ import java.util.*
 @Composable
 fun LeadOutcomeScreen(form: Form, onChange: (Form) -> Unit, staff: EmployeeInfo?, onBack: () -> Unit, onFinish: () -> Unit) = Scrolling {
     val ctx = LocalContext.current
-    Text("Lead outcome", fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
-    Text("LEAD OUTCOME", fontSize = 12.sp, color = Steel, letterSpacing = 1.sp)
+    Text("Purpose of Visit", fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
+    Text("PURPOSE OF VISIT", fontSize = 12.sp, color = Steel, letterSpacing = 1.sp)
     Text("Tap all that apply.", color = Steel)
     TileGrid(LEAD_OUTCOMES.map { o ->
         TileItem(o, when (o) {
             "Product Enquiry" -> Icons.Default.QuestionAnswer
             "Sample Request" -> Icons.Default.Science
-            "Spare Parts Requirement" -> Icons.Default.Build
+            "General Enquiry" -> Icons.Default.Info
             "Order" -> Icons.Default.ShoppingCart
             "Factory Visit" -> Icons.Default.Factory
             else -> Icons.Default.EventRepeat
@@ -128,7 +128,7 @@ private fun FollowUpDateTime(at: Long, onPick: (Long) -> Unit) {
 /** Products the visitor picked, one "- " line each, for the email and calendar text. */
 private fun interestLines(form: Form): String {
     val lines = Catalog.summarize(form.products).lines().filter { it.isNotBlank() } +
-        (if ("Other Products" in form.products && form.otherDetail.isNotBlank()) listOf("Other: ${form.otherDetail.trim()}") else emptyList())
+        (if (form.products.any { it.startsWith("Other Products > ") } && form.otherDetail.isNotBlank()) listOf("Other: ${form.otherDetail.trim()}") else emptyList())
     return lines.distinct().joinToString("\n") { "- $it" }
 }
 

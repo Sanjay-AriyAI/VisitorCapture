@@ -50,7 +50,7 @@ import java.util.*
 val CUSTOMER_TYPES = listOf("OEM", "End User", "Agent", "Distributor")
 val MARKET_EXPOSURE = listOf("Domestic Visitor", "International Visitor")
 val PRODUCTS = listOf("Mechanical Spares", "Electronics Spares", "Retrofits", "Other Products")
-val LEAD_OUTCOMES = listOf("Product Enquiry", "Sample Request", "Spare Parts Requirement", "Order", "Factory Visit", "Follow-up")
+val LEAD_OUTCOMES = listOf("Product Enquiry", "Sample Request", "General Enquiry", "Order", "Factory Visit", "Follow-up")
 val REMARK_OPTIONS = listOf("Call Back", "Factory Visit", "Need Follow-up", "Others")
 val FOLLOW_UP_ACTIONS = listOf("Send Quotation", "Schedule Factory Visit", "Automatic E-mail Reminder", "Remarks")
 val STEP_LABELS = listOf("Scan", "Details", "Customer", "Products", "Outcome", "Done")
@@ -334,20 +334,15 @@ fun App() {
                             Text("Product profile", fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
                             Text("Tap a product, then choose machines, makes and models. You can pick several.", color = Steel)
                             TileGrid(PRODUCTS.map { p ->
-                                if (p == "Other Products")
-                                    TileItem(p, Icons.Default.Inventory2, p in form.products, if (p in form.products) "Selected" else "Tap to add")
-                                else {
-                                    val c = form.products.count { it.startsWith("$p > ") }
-                                    TileItem(p,
-                                        when (p) { "Mechanical Spares" -> Icons.Default.Build; "Electronics Spares" -> Icons.Default.Memory; else -> Icons.Default.Autorenew },
-                                        c > 0, if (c > 0) "$c selected  ›" else "Choose  ›")
-                                }
-                            }) { k ->
-                                if (k == "Other Products")
-                                    form = form.copy(products = if (k in form.products) form.products - k else form.products + k)
-                                else { catalogProduct = k; screen = Screen.Catalog }
-                            }
-                            if ("Other Products" in form.products)
+                                val c = form.products.count { it.startsWith("$p > ") }
+                                TileItem(p,
+                                    when (p) {
+                                        "Mechanical Spares" -> Icons.Default.Build; "Electronics Spares" -> Icons.Default.Memory
+                                        "Retrofits" -> Icons.Default.Autorenew; else -> Icons.Default.Inventory2
+                                    },
+                                    c > 0, if (c > 0) "$c selected  ›" else "Choose  ›")
+                            }) { k -> catalogProduct = k; screen = Screen.Catalog }
+                            if (form.products.any { it.startsWith("Other Products > ") })
                                 OutlinedTextField(form.otherDetail, { form = form.copy(otherDetail = it) },
                                     placeholder = { Text("Tell us more about what you're after") },
                                     modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
