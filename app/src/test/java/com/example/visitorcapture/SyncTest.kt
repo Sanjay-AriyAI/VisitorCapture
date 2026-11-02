@@ -27,6 +27,17 @@ class SyncTest {
         assertEquals("1761000000000", r["FollowUpAtMs"])
         assertEquals(16, r["FollowUpDate"]!!.length)   // yyyy-MM-dd HH:mm in the phone's time zone
         assertEquals("", r["Photo"])
+        assertEquals("", r["HandwrittenNotes"])
+    }
+
+    @Test fun handwrittenNotesExportExistingFilesOnly() {
+        val dir = java.nio.file.Files.createTempDirectory("notes").toFile()
+        val a = java.io.File(dir, "0f8c1d2e_note_1.jpg").apply { writeBytes(byteArrayOf(1)) }
+        val b = java.io.File(dir, "0f8c1d2e_note_2.png").apply { writeBytes(byteArrayOf(2)) }
+        val gone = java.io.File(dir, "0f8c1d2e_note_3.jpg")
+        val r = row(visitor(followUpAt = 0).copy(notePhotoPaths = listOf(a, gone, b).joinToString("|") { it.absolutePath }))
+        assertEquals("notes/0f8c1d2e_note_1.jpg; notes/0f8c1d2e_note_2.png", r["HandwrittenNotes"])
+        dir.deleteRecursively()
     }
 
     @Test fun noFollowUpDateExportsBlank() {

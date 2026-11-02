@@ -13,6 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -53,6 +54,7 @@ val PRODUCTS = listOf("Mechanical Spares", "Electronics Spares", "Retrofits", "O
 val LEAD_OUTCOMES = listOf("Product Enquiry", "Sample Request", "General Enquiry", "Order", "Factory Visit", "Follow-up")
 val REMARK_OPTIONS = listOf("Call Back", "Factory Visit", "Need Follow-up", "Others")
 val FOLLOW_UP_ACTIONS = listOf("Send Quotation", "Schedule Factory Visit", "Automatic E-mail Reminder", "Remarks")
+const val MAX_NOTE_PHOTOS = 5   // handwritten-enquiry images per visit
 val STEP_LABELS = listOf("Scan", "Details", "Customer", "Products", "Outcome", "Done")
 
 enum class Screen(val step: Int) {
@@ -114,9 +116,21 @@ fun App() {
         scope.launch { db.dao().setAdditionalInterest(uid, t) }
     }
 
+    // Photos / uploads of handwritten enquiries attached on the Done screen. Saved as image files on the visitor.
+    var notePhotos by remember { mutableStateOf(listOf<File>()) }
+    var pendingNote by remember { mutableStateOf<File?>(null) }
+    var noteBusy by remember { mutableStateOf(false) }      // camera / picker open or copying: holds the auto-reset
+    var noteError by remember { mutableStateOf<String?>(null) }
+    fun persistNotes() {
+        val uid = lastUid ?: return
+        val paths = notePhotos.joinToString("|") { it.absolutePath }
+        scope.launch { db.dao().setNotePhotos(uid, paths) }
+    }
+
     fun reset() {
         persistExtra()
         lastUid = null; extraNote = ""; extraSaved = ""
+        notePhotos = emptyList(); pendingNote = null; noteBusy = false; noteError = null
         form = Form(); photoFile = null; photoTaken = false; ocrError = false; visitStart = 0L; screen = Screen.Welcome
     }
 
@@ -148,6 +162,62 @@ fun App() {
     fun openCamera() {
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchCamera()
         else camPerm.launch(Manifest.permission.CAMERA)
+    }
+
+    // Note images live next to the card photos (cards/ is already shared with the camera via the FileProvider).
+    fun newNoteFile(ext: String): File? {
+        val uid = lastUid ?: return null
+        val dir = File(ctx.filesDir, "cards").apply { mkdirs() }
+        return File(dir, "${uid}_note_${System.currentTimeMillis()}_${notePhotos.size}.$ext")
+    }
+    val takeNotePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val f = pendingNote
+        if (ok && f != null && f.length() > 0) { notePhotos = notePhotos + f; persistNotes() } else f?.delete()
+        pendingNote = null; noteBusy = false
+    }
+    fun launchNoteCamera() {
+        val f = newNoteFile("jpg") ?: run { noteBusy = false; return }
+        pendingNote = f; noteBusy = true; noteError = null
+        takeNotePicture.launch(FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", f))
+    }
+    val noteCamPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        if (it) launchNoteCamera() else { noteBusy = false; noteError = "Camera permission is needed to take a photo." }
+    }
+    fun openNoteCamera() {
+        if (notePhotos.size >= MAX_NOTE_PHOTOS) { noteError = "You can attach up to $MAX_NOTE_PHOTOS images."; return }
+        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchNoteCamera()
+        else { noteBusy = true; noteCamPerm.launch(Manifest.permission.CAMERA) }
+    }
+    val uploadNotes = rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        if (uris.isEmpty()) { noteBusy = false; return@rememberLauncherForActivityResult }
+        scope.launch {
+            val room = MAX_NOTE_PHOTOS - notePhotos.size
+            val copied = withContext(Dispatchers.IO) {
+                uris.take(room).mapIndexedNotNull { i, u ->
+                    val ext = when (ctx.contentResolver.getType(u)) { "image/png" -> "png"; "image/webp" -> "webp"; else -> "jpg" }
+                    val f = newNoteFile(ext)?.let { File(it.parentFile, it.nameWithoutExtension + "_$i.$ext") } ?: return@mapIndexedNotNull null
+                    try {
+                        ctx.contentResolver.openInputStream(u)?.use { inp -> f.outputStream().use { inp.copyTo(it) } }
+                        f.takeIf { it.length() > 0 } ?: run { f.delete(); null }
+                    } catch (e: Exception) { f.delete(); null }
+                }
+            }
+            if (copied.isNotEmpty()) { notePhotos = notePhotos + copied; persistNotes() }
+            noteError = when {
+                copied.size < uris.take(room).size -> "Some images couldn't be added."
+                uris.size > room -> "Only $MAX_NOTE_PHOTOS images can be attached; the rest were skipped."
+                else -> null
+            }
+            noteBusy = false
+        }
+    }
+    fun openNoteUpload() {
+        if (notePhotos.size >= MAX_NOTE_PHOTOS) { noteError = "You can attach up to $MAX_NOTE_PHOTOS images."; return }
+        noteBusy = true; noteError = null
+        uploadNotes.launch("image/*")
+    }
+    fun removeNote(f: File) {
+        notePhotos = notePhotos - f; f.delete(); persistNotes()
     }
 
     val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -210,9 +280,12 @@ fun App() {
     }
 
     // Auto-reset the done screen after 15 s of inactivity, like the kiosk. Typing a note restarts the clock
-    // and allows 30 s, so the visitor is never cut off mid-sentence.
-    LaunchedEffect(screen, extraNote) {
-        if (screen == Screen.Done) { delay(if (extraNote.isBlank()) 15_000 else 30_000); reset() }
+    // and allows 30 s, so the visitor is never cut off mid-sentence. The camera / picker pauses the clock,
+    // and each attached image restarts it.
+    LaunchedEffect(screen, extraNote, noteBusy, notePhotos) {
+        if (screen == Screen.Done && !noteBusy) {
+            delay(if (extraNote.isBlank() && notePhotos.isEmpty()) 15_000 else 30_000); reset()
+        }
     }
     // Save the note shortly after the last keystroke (reset() also saves it, so nothing is lost).
     LaunchedEffect(extraNote) { delay(700); persistExtra() }
@@ -376,6 +449,25 @@ fun App() {
                                 OutlinedTextField(extraNote, { extraNote = it.take(1000) },
                                     placeholder = { Text("Additional products, models, makes or quantities") },
                                     minLines = 3, maxLines = 6, modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
+                                Text("Have a handwritten enquiry? Attach a photo of it.", color = Steel, fontSize = 13.sp)
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    SecondaryButton("Take photo") { openNoteCamera() }
+                                    SecondaryButton("Upload image") { openNoteUpload() }
+                                }
+                                if (notePhotos.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    notePhotos.forEach { f ->
+                                        Box(Modifier.size(84.dp).clip(Shape6).border(1.dp, LineDim, Shape6)) {
+                                            AsyncImage(f, "Handwritten enquiry", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                            IconButton({ removeNote(f) }, Modifier.align(Alignment.TopEnd).size(28.dp)
+                                                .background(Navy.copy(alpha = 0.7f), Shape6)) {
+                                                Icon(Icons.Default.Close, "Remove image", tint = LineC, modifier = Modifier.size(16.dp))
+                                            }
+                                        }
+                                    }
+                                }
+                                if (notePhotos.isNotEmpty()) Text("${notePhotos.size} image(s) attached. Saved with this visit.", color = Steel, fontSize = 12.sp)
+                                noteError?.let { Text(it, color = Color_F0C3B8, fontSize = 12.sp) }
                                 Text(when {
                                     extraNote.isBlank() -> "Optional. Saved automatically."
                                     extraNote.trim() == extraSaved -> "Saved"
@@ -399,7 +491,12 @@ fun App() {
                 signedIn = employee?.name, onSwitchUser = { showAdmin = false; screen = Screen.Login },
                 onClose = { showAdmin = false }, onExport = { exportData() },
                 onImport = { importPicker.launch(arrayOf("*/*")) },
-                onDelete = { v -> scope.launch { db.dao().delete(v) } },
+                onDelete = { v ->
+                    scope.launch {
+                        db.dao().delete(v)
+                        withContext(Dispatchers.IO) { v.cardPhotoPath?.let { File(it).delete() }; Sync.notePhotos(v).forEach { it.delete() } }
+                    }
+                },
                 onClear = { scope.launch { db.dao().clear(); File(ctx.filesDir, "cards").deleteRecursively() } })
         }
     }
@@ -440,6 +537,8 @@ fun AdminPanel(visitors: List<Visitor>, deviceName: String, onDeviceName: (Strin
                onClose: () -> Unit, onExport: () -> Unit, onImport: () -> Unit,
                onDelete: (Visitor) -> Unit, onClear: () -> Unit) {
     var confirmClear by remember { mutableStateOf(false) }
+    var clearText by remember { mutableStateOf("") }
+    var pendingDelete by remember { mutableStateOf<Visitor?>(null) }
     val fmt = remember { SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()) }
     Column(Modifier.fillMaxSize().background(NavyDeep).padding(20.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -479,6 +578,11 @@ fun AdminPanel(visitors: List<Visitor>, deviceName: String, onDeviceName: (Strin
                         Text(Catalog.summarize(v.products.split("; ").filter { it.isNotBlank() }), fontSize = 12.sp, color = Amber)
                         if (v.otherDetail.isNotBlank()) Text(v.otherDetail, fontSize = 12.sp, color = LineDim)
                         if (v.additionalInterest.isNotBlank()) Text("Also interested in: " + v.additionalInterest, fontSize = 12.sp, color = LineDim)
+                        val notes = Sync.notePhotos(v)
+                        if (notes.isNotEmpty()) Row(Modifier.padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            notes.forEach { AsyncImage(it, "Handwritten enquiry", Modifier.size(40.dp).clip(RoundedCornerShape(4.dp)),
+                                contentScale = ContentScale.Crop) }
+                        }
                         if (v.leadOutcomes.isNotBlank()) Text("Outcome: " + v.leadOutcomes.replace("; ", " · "), fontSize = 12.sp, color = Amber)
                         val remark = if (v.remarks == "Others" && v.remarksOther.isNotBlank()) "Others: ${v.remarksOther}" else v.remarks
                         if (remark.isNotBlank()) Text("Remarks: $remark", fontSize = 12.sp, color = LineDim)
@@ -488,15 +592,48 @@ fun AdminPanel(visitors: List<Visitor>, deviceName: String, onDeviceName: (Strin
                         if (v.discussionNotes.isNotBlank())
                             Text(v.discussionNotes, fontSize = 12.sp, color = LineDim, maxLines = 3, overflow = TextOverflow.Ellipsis)
                     }
-                    IconButton({ onDelete(v) }) { Icon(Icons.Default.Delete, "Delete", tint = Steel) }
+                    IconButton({ pendingDelete = v }) { Icon(Icons.Default.Delete, "Delete", tint = Steel) }
                 }
             }
         }
     }
+    pendingDelete?.let { v ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            icon = { Icon(Icons.Default.Delete, null, tint = Danger) },
+            title = { Text("Delete this visitor?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(listOf(v.name.ifBlank { "Unnamed visitor" }, v.company).filter { it.isNotBlank() }.joinToString(" · "),
+                        fontWeight = FontWeight.SemiBold)
+                    Text("Visited " + fmt.format(Date(v.createdAt)), fontSize = 13.sp)
+                    Text("Their details, card photo and attached images will be removed from this phone. This can't be undone.")
+                }
+            },
+            confirmButton = { TextButton({ onDelete(v); pendingDelete = null }) { Text("Delete", color = Danger) } },
+            dismissButton = { TextButton({ pendingDelete = null }) { Text("Cancel") } })
+    }
     if (confirmClear) AlertDialog(
-        onDismissRequest = { confirmClear = false },
-        title = { Text("Delete all logged visitors?") },
-        text = { Text("This can't be undone.") },
-        confirmButton = { TextButton({ onClear(); confirmClear = false }) { Text("Delete all") } },
-        dismissButton = { TextButton({ confirmClear = false }) { Text("Cancel") } })
+        onDismissRequest = { confirmClear = false; clearText = "" },
+        icon = { Icon(Icons.Default.Warning, null, tint = Danger) },
+        title = { Text("Delete all ${visitors.size} visitors?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Every visitor on this phone, with card photos and attached images, will be permanently deleted. " +
+                    "Export first if this data hasn't been merged yet.")
+                OutlinedTextField(clearText, { clearText = it }, singleLine = true,
+                    label = { Text("Type DELETE to confirm") }, modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            TextButton({ onClear(); confirmClear = false; clearText = "" }, enabled = clearText.trim() == "DELETE") {
+                Text("Delete all", color = if (clearText.trim() == "DELETE") Danger else Steel)
+            }
+        },
+        dismissButton = {
+            Row {
+                TextButton({ confirmClear = false; clearText = ""; onExport() }) { Text("Export first") }
+                TextButton({ confirmClear = false; clearText = "" }) { Text("Cancel") }
+            }
+        })
 }
