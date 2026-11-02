@@ -11,6 +11,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Icon
@@ -39,10 +40,15 @@ fun CatalogScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(product, fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
-            Text("Tap a machine, then tick every make or model you deal with.", color = Steel)
+            Text(when (product) {
+                "Retrofits" -> "Tap a machine, then tick the retrofits wanted under each make."
+                "Other Products" -> "Tap every spare part the visitor is interested in."
+                else -> "Tap a machine, then tick every make or model you deal with."
+            }, color = Steel)
             machines.forEach { m ->
                 val all = Catalog.paths(product, m)
                 val n = all.count { it in selected }
+                val leaf = m.sections.isEmpty()   // nothing to expand: tapping the card ticks it
                 val isOpen = open == m.name
                 Column(
                     Modifier.fillMaxWidth().clip(Shape6)
@@ -50,16 +56,19 @@ fun CatalogScreen(
                         .border(1.5.dp, if (n > 0) Amber else LineC.copy(alpha = 0.18f), Shape6)
                 ) {
                     Row(
-                        Modifier.fillMaxWidth().clickable { open = if (isOpen) null else m.name }.padding(16.dp),
+                        Modifier.fillMaxWidth().clickable { if (leaf) onToggle(all.first()) else open = if (isOpen) null else m.name }
+                            .padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(m.name, Modifier.weight(1f), fontSize = 18.sp, fontWeight = FontWeight.SemiBold, fontFamily = Display)
-                        if (n > 0) {
+                        if (leaf) {
+                            Icon(Icons.Default.Check, null, tint = if (n > 0) Amber else Steel.copy(alpha = 0.35f))
+                        } else if (n > 0) {
                             Text("$n", color = NavyDeep, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                                 modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Amber).padding(horizontal = 9.dp, vertical = 2.dp))
                             Spacer(Modifier.width(8.dp))
                         }
-                        Icon(if (isOpen) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, tint = Steel)
+                        if (!leaf) Icon(if (isOpen) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, tint = Steel)
                     }
                     if (isOpen) Column(
                         Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),

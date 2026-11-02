@@ -11,7 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,7 +58,7 @@ fun SecondaryButton(text: String, modifier: Modifier = Modifier, onClick: () -> 
 fun LinkButton(text: String, onClick: () -> Unit) =
     TextButton(onClick) { Text(text, color = Steel, fontSize = 14.sp) }
 
-/** Top progress rail: Scan - Details - Customer - Products - Done. A negative [step] hides the track (login screen). */
+/** Top progress rail: Scan - Details - Customer - Products - Outcome - Done. A negative [step] hides the track (login screen). */
 @Composable
 fun ProgressRail(step: Int, labels: List<String>, attendedBy: String?, trailing: @Composable () -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
@@ -75,21 +75,24 @@ fun ProgressRail(step: Int, labels: List<String>, attendedBy: String?, trailing:
         if (step >= 0) Column {
         Spacer(Modifier.height(6.dp))
         val last = (labels.size - 1).coerceAtLeast(1)
-        Box(Modifier.fillMaxWidth()) {
-            Box(Modifier.padding(start = 32.dp, end = 32.dp, top = 10.dp)) {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            // Columns shrink below 64 dp so all steps still fit on a narrow phone.
+            val colW = minOf(64.dp, maxWidth / labels.size.coerceAtLeast(1))
+            Box(Modifier.padding(start = colW / 2, end = colW / 2, top = 10.dp)) {
                 Box(Modifier.fillMaxWidth().height(2.dp).background(LineDim.copy(alpha = 0.35f)))
                 Box(Modifier.fillMaxWidth(step.toFloat() / last).height(2.dp).background(Amber))
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 labels.forEachIndexed { i, l ->
-                    Column(Modifier.width(64.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(Modifier.width(colW), horizontalAlignment = Alignment.CenterHorizontally) {
                         Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) {
                             if (i == step) Box(Modifier.size(22.dp).clip(CircleShape).background(Amber.copy(alpha = 0.18f)))
                             Box(Modifier.size(12.dp).clip(CircleShape)
                                 .background(if (i <= step) Amber else Navy)
                                 .border(2.dp, if (i <= step) Amber else LineDim.copy(alpha = 0.6f), CircleShape))
                         }
-                        Text(l, fontSize = 12.sp, color = if (i == step) LineC else Steel)
+                        Text(l, fontSize = if (colW < 60.dp) 11.sp else 12.sp, color = if (i == step) LineC else Steel,
+                            maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -140,6 +143,24 @@ fun OptionChip(label: String, selected: Boolean, onClick: () -> Unit) =
             selectedContainerColor = Amber, selectedLabelColor = NavyDeep, selectedLeadingIconColor = NavyDeep),
         border = FilterChipDefaults.filterChipBorder(enabled = true, selected = selected,
             borderColor = LineDim.copy(alpha = 0.4f), selectedBorderColor = Amber))
+
+/** Read-only dropdown on the dark background. Shows [placeholder] until an option is picked. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DropdownField(placeholder: String, options: List<String>, selected: String?, onSelect: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(open, { open = it }) {
+        OutlinedTextField(selected.orEmpty(), {}, readOnly = true, singleLine = true,
+            placeholder = { Text(placeholder) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(open) },
+            modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable), colors = darkFieldColors())
+        ExposedDropdownMenu(open, { open = false }, containerColor = PanelOn) {
+            options.forEach { o ->
+                DropdownMenuItem({ Text(o, color = if (o == selected) Amber else LineC) }, { onSelect(o); open = false })
+            }
+        }
+    }
+}
 
 @Composable
 fun darkFieldColors() = OutlinedTextFieldDefaults.colors(

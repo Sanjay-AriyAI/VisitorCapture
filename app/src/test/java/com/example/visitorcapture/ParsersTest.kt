@@ -3,6 +3,7 @@ package com.example.visitorcapture
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CardParserTest {
@@ -78,6 +79,63 @@ class CardParserTest {
         val p = parseCard("Industrial Estate Road\nAnil Kumar\nSales Manager\nSunrise Ltd\nPune, Maharashtra")
         assertEquals("Anil Kumar", p.name)
         assertEquals("Maharashtra", p.state)
+    }
+
+    private val sendka = """
+        SENDKA
+        Belting & Conveyors
+        SENTHILKUMAR N.
+        PVC-PU-Cotton Conveyor | Flat Belt | Plain-Endless Teflon | PU Rope-Sheets
+        Sidewall & Cleated Conveyors | Open Timing Belt | Mechanical Fasteners
+        146/3, 146/3-1, Bharathi Street,
+        Anjugam Nagar, Chinnavedampatti (Po),
+        Coimbatore - 641 049.
+        www.dkbelt.com
+        +91 98435 34445
+        info@dkbelt.com
+        sales@sendka.com
+        Tirupur Erode Madurai
+    """.trimIndent()
+
+    @Test fun logoCompanyIsFoundFromEmailDomain() {
+        val p = parseCard(sendka)
+        assertEquals("SENDKA", p.company)
+        assertEquals("SENTHILKUMAR N.", p.name)   // not the "Belting & Conveyors" tagline
+        assertEquals("", p.title)
+        assertEquals("+91 98435 34445", p.phone)
+        assertTrue(p.address.contains("Coimbatore - 641 049"))
+    }
+
+    @Test fun companyMatchToleratesOneOcrSlip() {
+        assertEquals("SENOKA", parseCard(sendka.replaceFirst("SENDKA", "SENOKA")).company)
+    }
+
+    private val eyeshivNameBlock = "Samaira Kapoor\nGraphic Designer"
+    private val eyeshivLogo = "EYESHIV\nCOMMITTED TO DELIVERING A BETTER"
+    private val eyeshivContact = """
+        +91-99103 69326 (WhatsApp)
+        www.eyeshiv.com | www.shop.eyeshiv.com
+        info@eyeshiv.com, eyeshiv@gmail.com
+        38 A, Vasant Kunj Phase 1,
+        New Delhi-110070
+    """.trimIndent()
+
+    @Test fun logoCompanyFromWebsiteAndWiderTitles() {
+        // ML Kit may emit the logo block before or after the name block
+        listOf("$eyeshivLogo\n$eyeshivNameBlock\n$eyeshivContact", "$eyeshivNameBlock\n$eyeshivLogo\n$eyeshivContact").forEach {
+            val p = parseCard(it)
+            assertEquals("EYESHIV", p.company)
+            assertEquals("Samaira Kapoor", p.name)
+            assertEquals("Graphic Designer", p.title)
+            assertEquals("Delhi", p.state)
+        }
+    }
+
+    @Test fun freeMailDomainIsNotUsedAsCompany() {
+        val p = parseCard("Rahul Verma\nProprietor\nShree Balaji\nrahulverma@gmail.com\n+91 98765 12345")
+        assertEquals("", p.company)
+        assertEquals("Proprietor", p.title)
+        assertEquals("Rahul Verma", p.name)
     }
 }
 

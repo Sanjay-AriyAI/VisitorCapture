@@ -16,16 +16,26 @@ object Sync {
     private val HEADERS = listOf("UID", "Device", "VisitDate", "VisitTime", "VisitedAt", "TimestampMs",
         "Name", "Title", "Company", "Phone", "Email", "Address", "State", "Country",
         "CustomerType", "MarketExposure", "Products", "OtherDetail", "AdditionalInterest",
-        "AttendedBy", "AttendedByTitle", "AttendedByEmail", "AttendedByPhone", "AttendedByKey", "Photo")
+        "AttendedBy", "AttendedByTitle", "AttendedByEmail", "AttendedByPhone", "AttendedByKey",
+        "LeadOutcome", "DiscussionNotes", "Remarks", "RemarksOther",
+        "FollowUpAction", "FollowUpDate", "FollowUpAtMs", "FollowUpNote", "Photo", "HandwrittenNotes")
 
     private fun q(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
 
     private fun hasPhoto(v: Visitor) = v.cardPhotoPath?.let { File(it).exists() } == true
 
+    /** File names allowed for handwritten-note images, in the zip and in the cards folder. */
+    private val NOTE_NAME = Regex("[A-Za-z0-9_-]{8,100}\\.(jpg|png|webp)")
+
+    /** Existing handwritten-note images of a visitor. */
+    fun notePhotos(v: Visitor): List<File> =
+        v.notePhotoPaths.split("|").filter { it.isNotBlank() }.map(::File).filter { it.exists() }
+
     fun toCsv(list: List<Visitor>): String {
         val dateFmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
         val timeFmt = SimpleDateFormat("HH:mm:ss", Locale.US)
         val isoFmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
+        val followFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
         val sb = StringBuilder(HEADERS.joinToString(",")).append("\n")
         list.forEach { v ->
             val at = Date(v.createdAt)
@@ -33,12 +43,16 @@ object Sync {
                 v.name, v.title, v.company, v.phone, v.email, v.address, v.state, v.country,
                 v.customerType, v.marketExposure, v.products, v.otherDetail, v.additionalInterest,
                 v.attendedByName, v.attendedByTitle, v.attendedByEmail, v.attendedByPhone, v.attendedByKey,
-                if (hasPhoto(v)) "photos/${v.uid}.jpg" else "").joinToString(",") { q(it) }).append("\n")
+                v.leadOutcomes, v.discussionNotes, v.remarks, v.remarksOther, v.followUpAction,
+                if (v.followUpAt > 0) followFmt.format(Date(v.followUpAt)) else "",
+                if (v.followUpAt > 0) v.followUpAt.toString() else "", v.followUpNote,
+                if (hasPhoto(v)) "photos/${v.uid}.jpg" else "",
+                notePhotos(v).joinToString("; ") { "notes/${it.name}" }).joinToString(",") { q(it) }).append("\n")
         }
         return sb.toString()
     }
 
-    /** Zip with visitors.csv + photos/<uid>.jpg */
+    /** Zip with visitors.csv + photos/<uid>.jpg (business cards) + notes/<file> (handwritten enquiries) */
     fun exportZip(ctx: Context, list: List<Visitor>, device: String): File {
         val dir = File(ctx.cacheDir, "exports").apply { mkdirs() }
         dir.listFiles()?.forEach { it.delete() }
@@ -50,6 +64,11 @@ object Sync {
             list.filter(::hasPhoto).forEach { v ->
                 z.putNextEntry(ZipEntry("photos/${v.uid}.jpg"))
                 File(v.cardPhotoPath!!).inputStream().use { it.copyTo(z) }
+                z.closeEntry()
+            }
+            list.flatMap(::notePhotos).distinctBy { it.name }.forEach { n ->
+                z.putNextEntry(ZipEntry("notes/${n.name}"))
+                n.inputStream().use { it.copyTo(z) }
                 z.closeEntry()
             }
         }
@@ -94,6 +113,9 @@ object Sync {
                     else if (e.name.startsWith("photos/")) {
                         val n = e.name.substringAfterLast('/')
                         if (n.matches(Regex("[A-Za-z0-9-]{8,64}\\.jpg"))) File(cards, n).outputStream().use { zin.copyTo(it) }
+                    } else if (e.name.startsWith("notes/")) {
+                        val n = e.name.substringAfterLast('/')
+                        if (n.matches(NOTE_NAME)) File(cards, n).outputStream().use { zin.copyTo(it) }
                     }
                 }
                 e = zin.nextEntry
@@ -110,15 +132,22 @@ object Sync {
             val uid = g(r, "UID").trim()
             if (!uid.matches(Regex("[A-Za-z0-9-]{8,64}"))) { skipped++; continue }
             val photo = File(cards, "$uid.jpg").takeIf { it.exists() }?.absolutePath
+            val notes = g(r, "HandwrittenNotes").split(";").map { it.trim().substringAfterLast('/') }
+                .filter { it.matches(NOTE_NAME) }.map { File(cards, it) }.filter { it.exists() }
+                .joinToString("|") { it.absolutePath }
             val v = Visitor(uid = uid, deviceName = g(r, "Device"), name = g(r, "Name"), title = g(r, "Title"),
                 company = g(r, "Company"), email = g(r, "Email"), phone = g(r, "Phone"),
                 address = g(r, "Address"), state = g(r, "State"), country = g(r, "Country"),
                 customerType = g(r, "CustomerType"), marketExposure = g(r, "MarketExposure"), products = g(r, "Products"), otherDetail = g(r, "OtherDetail"),
-                additionalInterest = g(r, "AdditionalInterest"),
+                additionalInterest = g(r, "AdditionalInterest"), notePhotoPaths = notes,
                 cardPhotoPath = photo, createdAt = g(r, "TimestampMs").toLongOrNull() ?: System.currentTimeMillis(),
                 attendedByKey = g(r, "AttendedByKey"), attendedByName = g(r, "AttendedBy"),
                 attendedByTitle = g(r, "AttendedByTitle"), attendedByEmail = g(r, "AttendedByEmail"),
-                attendedByPhone = g(r, "AttendedByPhone"))
+                attendedByPhone = g(r, "AttendedByPhone"),
+                leadOutcomes = g(r, "LeadOutcome"), discussionNotes = g(r, "DiscussionNotes"),
+                remarks = g(r, "Remarks"), remarksOther = g(r, "RemarksOther"),
+                followUpAction = g(r, "FollowUpAction"), followUpAt = g(r, "FollowUpAtMs").toLongOrNull() ?: 0L,
+                followUpNote = g(r, "FollowUpNote"))
             if (dao.insert(v) == -1L) skipped++ else added++
         }
         return added to skipped

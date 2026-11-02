@@ -24,6 +24,7 @@ data class Visitor(
     val products: String,       // selected catalogue paths joined with "; "
     val otherDetail: String,
     val additionalInterest: String = "",   // free text typed on the Done screen: other products / models of interest
+    val notePhotoPaths: String = "",       // photos / uploads of handwritten enquiries from the Done screen, absolute paths joined with "|"
     val cardPhotoPath: String?,
     val createdAt: Long,        // date and time of the visit (epoch ms), stamped when the visit starts
     // the staff member who attended this visitor, copied from the QR login at the time of the visit
@@ -31,7 +32,15 @@ data class Visitor(
     val attendedByName: String = "",
     val attendedByTitle: String = "",
     val attendedByEmail: String = "",
-    val attendedByPhone: String = ""
+    val attendedByPhone: String = "",
+    // lead outcome & follow-up, recorded by staff on the Outcome step
+    val leadOutcomes: String = "",      // selected outcomes joined with "; "
+    val discussionNotes: String = "",
+    val remarks: String = "",           // Call Back | Factory Visit | Need Follow-up | Others
+    val remarksOther: String = "",      // free text when remarks is "Others"
+    val followUpAction: String = "",    // Send Quotation | Schedule Factory Visit | Automatic E-mail Reminder | Remarks
+    val followUpAt: Long = 0,           // follow-up date and time (epoch ms), 0 if none
+    val followUpNote: String = ""       // free text when followUpAction is "Remarks"
 )
 
 /** Staff who have logged in on this phone by scanning their vCard QR code. */
@@ -55,6 +64,7 @@ interface VisitorDao {
     @Delete suspend fun delete(v: Visitor)
     @Query("DELETE FROM visitors") suspend fun clear()
     @Query("UPDATE visitors SET additionalInterest = :text WHERE uid = :uid") suspend fun setAdditionalInterest(uid: String, text: String)
+    @Query("UPDATE visitors SET notePhotoPaths = :paths WHERE uid = :uid") suspend fun setNotePhotos(uid: String, paths: String)
     @Query("SELECT * FROM visitors ORDER BY createdAt DESC") fun all(): Flow<List<Visitor>>
 }
 
@@ -105,7 +115,24 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
-@Database(entities = [Visitor::class, Employee::class], version = 4, exportSchema = false)
+/** v4 -> v5: lead outcome, discussion notes, remarks and follow-up, captured on the Outcome step. */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        listOf("leadOutcomes", "discussionNotes", "remarks", "remarksOther", "followUpAction", "followUpNote").forEach {
+            db.execSQL("ALTER TABLE visitors ADD COLUMN `$it` TEXT NOT NULL DEFAULT ''")
+        }
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `followUpAt` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+/** v5 -> v6: photos / uploads of handwritten enquiries, attached on the Done screen. */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `notePhotoPaths` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+@Database(entities = [Visitor::class, Employee::class], version = 6, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): VisitorDao
     abstract fun employeeDao(): EmployeeDao
@@ -113,7 +140,7 @@ abstract class AppDb : RoomDatabase() {
         @Volatile private var inst: AppDb? = null
         fun get(c: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(c.applicationContext, AppDb::class.java, "visitors.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build().also { inst = it }
         }
     }
