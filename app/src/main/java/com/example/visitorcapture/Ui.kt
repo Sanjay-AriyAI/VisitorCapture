@@ -36,6 +36,7 @@ val Amber = Color(0xFFE8A33D)
 val Paper = Color(0xFFF3F1EA)
 val PaperLine = Color(0xFFC9C2AE)
 val PaperInk = Color(0xFF0B2033)
+val PaperHint = Color(0xFF8A5400)   // dark amber, readable on Paper
 val Danger = Color(0xFFC0563F)
 val Shape6 = RoundedCornerShape(6.dp)
 val Display = FontFamily.SansSerif

@@ -37,9 +37,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -103,6 +100,12 @@ fun App() {
     var photoFile by remember { mutableStateOf<File?>(null) }
     var photoTaken by remember { mutableStateOf(false) }
     var ocrError by remember { mutableStateOf(false) }
+    // Per-field "please check" notes from the card reader; a note disappears as soon as the visitor edits that field.
+    var fieldHints by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // What the scanner actually read, shown only in debug builds so a wrong field can be traced to its cause.
+    var ocrRaw by remember { mutableStateOf("") }
+    var showRaw by remember { mutableStateOf(false) }
+    val isDebugBuild = (ctx.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
     // Notes typed on the Done screen are written to the visitor saved a moment earlier.
     var lastUid by remember { mutableStateOf<String?>(null) }
@@ -131,22 +134,21 @@ fun App() {
         persistExtra()
         lastUid = null; extraNote = ""; extraSaved = ""
         notePhotos = emptyList(); pendingNote = null; noteBusy = false; noteError = null
-        form = Form(); photoFile = null; photoTaken = false; ocrError = false; visitStart = 0L; screen = Screen.Welcome
+        form = Form(); photoFile = null; photoTaken = false; ocrError = false; fieldHints = emptyMap(); visitStart = 0L; screen = Screen.Welcome
     }
 
     fun runOcr(file: File) {
         screen = Screen.Processing
-        try {
-            val img = InputImage.fromFilePath(ctx, Uri.fromFile(file))
-            TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS).process(img)
-                .addOnSuccessListener {
-                    val p = parseCard(it.text)
-                    form = form.copy(name = p.name, title = p.title, company = p.company, phone = p.phone, email = p.email,
-                        address = p.address, state = p.state, country = p.country)
-                    ocrError = false; screen = Screen.Details
-                }
-                .addOnFailureListener { ocrError = true; screen = Screen.Details }
-        } catch (e: Exception) { ocrError = true; screen = Screen.Details }
+        scope.launch {
+            val p = try { withContext(Dispatchers.Default) { CardReader.read(ctx, file) } } catch (e: Exception) { null }
+            if (p == null) { ocrError = true; fieldHints = emptyMap() }
+            else {
+                form = form.copy(name = p.name, title = p.title, company = p.company, phone = p.phone, email = p.email,
+                    address = p.address, state = p.state, country = p.country)
+                fieldHints = p.flags; ocrError = false; ocrRaw = p.raw
+            }
+            screen = Screen.Details
+        }
     }
 
     val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
@@ -346,7 +348,7 @@ fun App() {
                                 else PrimaryButton("Open camera") { openCamera() }
                             }
                             if (photoTaken) LinkButton("Retake") { openCamera() }
-                            LinkButton("Skip scan, enter details manually") { photoFile = null; photoTaken = false; ocrError = false; screen = Screen.Details }
+                            LinkButton("Skip scan, enter details manually") { photoFile = null; photoTaken = false; ocrError = false; fieldHints = emptyMap(); screen = Screen.Details }
                         }
 
                         Screen.Processing -> Centered {
@@ -366,13 +368,23 @@ fun App() {
                                     if (photoTaken && photoFile != null)
                                         AsyncImage(photoFile, "Card", Modifier.width(140.dp).aspectRatio(1.6f).clip(RoundedCornerShape(5.dp)),
                                             contentScale = ContentScale.Crop)
-                                    PaperField("Full name", form.name) { form = form.copy(name = it) }
-                                    PaperField("Job title", form.title) { form = form.copy(title = it) }
-                                    PaperField("Company", form.company) { form = form.copy(company = it) }
-                                    PaperField("Phone", form.phone) { form = form.copy(phone = it) }
-                                    PaperField("Email", form.email) { form = form.copy(email = it) }
-                                    PaperField("Address", form.address, singleLine = false) { form = form.copy(address = it) }
-                                    PaperField("State / Province", form.state) { form = form.copy(state = it) }
+                                    // Debug-only "show scanned text" toggle, disabled for now.
+                                    // if (isDebugBuild && ocrRaw.isNotEmpty()) {
+                                    //     TextButton(onClick = { showRaw = !showRaw }) {
+                                    //         Text(if (showRaw) "Hide scanned text (debug)" else "Show scanned text (debug)", color = PaperHint, fontSize = 12.sp)
+                                    //     }
+                                    //     if (showRaw) Text(ocrRaw, fontSize = 11.sp, color = PaperInk.copy(alpha = 0.8f),
+                                    //         modifier = Modifier.fillMaxWidth().background(PaperLine.copy(alpha = 0.3f)).padding(8.dp))
+                                    // }
+                                    if (fieldHints.isNotEmpty()) Text("Fields marked in amber need a quick check against the card.",
+                                        fontSize = 12.sp, color = PaperHint)
+                                    PaperField("Full name", form.name, hint = fieldHints["name"]) { form = form.copy(name = it); fieldHints = fieldHints - "name" }
+                                    PaperField("Job title", form.title, hint = fieldHints["title"]) { form = form.copy(title = it); fieldHints = fieldHints - "title" }
+                                    PaperField("Company", form.company, hint = fieldHints["company"]) { form = form.copy(company = it); fieldHints = fieldHints - "company" }
+                                    PaperField("Phone", form.phone, hint = fieldHints["phone"]) { form = form.copy(phone = it); fieldHints = fieldHints - "phone" }
+                                    PaperField("Email", form.email, hint = fieldHints["email"]) { form = form.copy(email = it); fieldHints = fieldHints - "email" }
+                                    PaperField("Address", form.address, singleLine = false, hint = fieldHints["address"]) { form = form.copy(address = it); fieldHints = fieldHints - "address" }
+                                    PaperField("State / Province", form.state, hint = fieldHints["state"]) { form = form.copy(state = it); fieldHints = fieldHints - "state" }
                                     PaperField("Country (if applicable)", form.country) { form = form.copy(country = it) }
                                 }
                             }
@@ -521,12 +533,14 @@ fun NavRow(left: @Composable () -> Unit, right: @Composable () -> Unit) =
         verticalAlignment = Alignment.CenterVertically) { left(); right() }
 
 @Composable
-fun PaperField(label: String, value: String, singleLine: Boolean = true, onChange: (String) -> Unit) =
+fun PaperField(label: String, value: String, singleLine: Boolean = true, hint: String? = null, onChange: (String) -> Unit) =
     OutlinedTextField(value, onChange, label = { Text(label) }, singleLine = singleLine,
         minLines = if (singleLine) 1 else 2, modifier = Modifier.fillMaxWidth(),
+        // A hint means the card reader was unsure: amber border plus a short note until the visitor edits the field.
+        supportingText = hint?.let { { Text(it, color = PaperHint) } },
         colors = OutlinedTextFieldDefaults.colors(
             focusedTextColor = PaperInk, unfocusedTextColor = PaperInk,
-            focusedBorderColor = Amber, unfocusedBorderColor = PaperLine,
+            focusedBorderColor = Amber, unfocusedBorderColor = if (hint != null) Amber else PaperLine,
             focusedLabelColor = PaperInk.copy(alpha = 0.7f), unfocusedLabelColor = PaperInk.copy(alpha = 0.6f),
             cursorColor = Amber))
 
