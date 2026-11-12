@@ -40,7 +40,9 @@ data class Visitor(
     val remarksOther: String = "",      // free text when remarks is "Others"
     val followUpAction: String = "",    // Send Quotation | Schedule Factory Visit | Automatic E-mail Reminder | Remarks
     val followUpAt: Long = 0,           // follow-up date and time (epoch ms), 0 if none
-    val followUpNote: String = ""       // free text when followUpAction is "Remarks"
+    val followUpNote: String = "",      // free text when followUpAction is "Remarks"
+    val thankYouStatus: String = "",    // "" (no valid e-mail / imported) | PENDING | SENT | FAILED
+    val thankYouSentAt: Long = 0        // epoch ms the thank-you mail was accepted by the SMTP server, 0 if not yet
 )
 
 /** Staff who have logged in on this phone by scanning their vCard QR code. */
@@ -65,6 +67,11 @@ interface VisitorDao {
     @Query("DELETE FROM visitors") suspend fun clear()
     @Query("UPDATE visitors SET additionalInterest = :text WHERE uid = :uid") suspend fun setAdditionalInterest(uid: String, text: String)
     @Query("UPDATE visitors SET notePhotoPaths = :paths WHERE uid = :uid") suspend fun setNotePhotos(uid: String, paths: String)
+    @Query("SELECT * FROM visitors WHERE thankYouStatus = 'QUEUED' ORDER BY createdAt") suspend fun queuedThankYou(): List<Visitor>
+    /** "Send thank-you mails" button: everything saved but not yet mailed joins the send queue. Returns how many. */
+    @Query("UPDATE visitors SET thankYouStatus = 'QUEUED' WHERE thankYouStatus = 'PENDING'") suspend fun queueAllThankYou(): Int
+    @Query("UPDATE visitors SET thankYouStatus = :status, thankYouSentAt = :at WHERE uid = :uid")
+    suspend fun markThankYou(uid: String, status: String, at: Long)
     @Query("SELECT * FROM visitors ORDER BY createdAt DESC") fun all(): Flow<List<Visitor>>
 }
 
@@ -132,7 +139,15 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
-@Database(entities = [Visitor::class, Employee::class], version = 6, exportSchema = false)
+/** v6 -> v7: status of the automatic thank-you e-mail. Existing visitors stay blank, so they are never mailed retroactively. */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `thankYouStatus` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `thankYouSentAt` INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+@Database(entities = [Visitor::class, Employee::class], version = 7, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): VisitorDao
     abstract fun employeeDao(): EmployeeDao
@@ -140,7 +155,7 @@ abstract class AppDb : RoomDatabase() {
         @Volatile private var inst: AppDb? = null
         fun get(c: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(c.applicationContext, AppDb::class.java, "visitors.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                 .build().also { inst = it }
         }
     }

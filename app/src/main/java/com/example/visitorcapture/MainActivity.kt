@@ -95,6 +95,7 @@ fun App() {
     var visitStart by remember { mutableLongStateOf(0L) }                     // date/time the current visit began
     var loggedAt by remember { mutableLongStateOf(0L) }                       // visit time shown on the Done screen
     var showAdmin by remember { mutableStateOf(false) }
+    var showMail by remember { mutableStateOf(false) }                        // Mail settings dialog on the home screen
     var catalogProduct by remember { mutableStateOf("Mechanical Spares") }
     var form by remember { mutableStateOf(Form()) }
     var photoFile by remember { mutableStateOf<File?>(null) }
@@ -255,9 +256,10 @@ fun App() {
             remarksOther = if (form.remark == "Others") form.remarkOther.trim() else "",
             followUpAction = follow.orEmpty(),
             followUpAt = if (follow != null && follow != "Remarks") form.followUpAt else 0L,
-            followUpNote = if (follow == "Remarks") form.followUpNote.trim() else "")
+            followUpNote = if (follow == "Remarks") form.followUpNote.trim() else "",
+            thankYouStatus = ThankYou.initialStatus(form.email))
         lastUid = v.uid; extraNote = ""; extraSaved = ""
-        scope.launch { db.dao().insert(v) }
+        scope.launch { db.dao().insert(v) }   // the thank-you mail waits (PENDING) until staff press "Send thank-you mails"
     }
 
     fun signIn(info: EmployeeInfo) {
@@ -330,6 +332,27 @@ fun App() {
                                     color = Amber, fontSize = 14.sp, textAlign = TextAlign.Center)
                                 LinkButton("Not you? Switch user") { screen = Screen.Login }
                             }
+                            // Thank-you mails: nothing is sent on its own; staff press the button and the mails go out once online.
+                            val unsent = visitors.count { it.thankYouStatus == ThankYou.PENDING }
+                            val queued = visitors.count { it.thankYouStatus == ThankYou.QUEUED }
+                            val failed = visitors.count { it.thankYouStatus == ThankYou.FAILED }
+                            if (unsent > 0 || queued > 0 || failed > 0) {
+                                Text(listOf("$unsent to send", "$queued queued", "$failed failed").filterIndexed { i, _ -> intArrayOf(unsent, queued, failed)[i] > 0 }
+                                    .joinToString(" · ") + " (thank-you mails)", color = Steel, fontSize = 13.sp, textAlign = TextAlign.Center)
+                            }
+                            if (unsent > 0) SecondaryButton("Send thank-you mails ($unsent)") {
+                                if (!SmtpSettings.load(ctx).complete) {
+                                    android.widget.Toast.makeText(ctx, "Enter the mail settings first", android.widget.Toast.LENGTH_LONG).show()
+                                    showMail = true
+                                } else scope.launch {
+                                    val n = db.dao().queueAllThankYou()
+                                    ThankYouWorker.enqueue(ctx)
+                                    android.widget.Toast.makeText(ctx, "$n thank-you mail(s) queued. They send as soon as the phone is online.",
+                                        android.widget.Toast.LENGTH_LONG).show()
+                                }
+                            }
+                            LinkButton("Mail settings") { showMail = true }
+                            if (showMail) MailSettingsDialog(onDone = { showMail = false })
                         }
 
                         Screen.Capture -> Centered {
@@ -509,12 +532,78 @@ fun App() {
                         withContext(Dispatchers.IO) { v.cardPhotoPath?.let { File(it).delete() }; Sync.notePhotos(v).forEach { it.delete() } }
                     }
                 },
-                onClear = { scope.launch { db.dao().clear(); File(ctx.filesDir, "cards").deleteRecursively() } })
+                onClear = { scope.launch { db.dao().clear(); File(ctx.filesDir, "cards").deleteRecursively() } },
+                onRetryThankYou = { v ->
+                    scope.launch {
+                        if (ThankYou.isValidEmail(v.email)) { db.dao().markThankYou(v.uid, ThankYou.QUEUED, 0); ThankYouWorker.enqueue(ctx) }
+                    }
+                })
         }
     }
 }
 
-val Color_F0C3B8 = androidx.compose.ui.graphics.Color(0xFFF0C3B8)
+/** Sender account for the automatic thank-you mail. "Save & send test" mails the account itself, so mistakes show up at once. */
+@Composable
+fun MailSettingsDialog(onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val initial = remember { SmtpSettings.load(ctx) }
+    var host by remember { mutableStateOf(initial.host.ifBlank { "smtp.gmail.com" }) }
+    var port by remember { mutableStateOf(initial.port.toString()) }
+    var user by remember { mutableStateOf(initial.user) }
+    var password by remember { mutableStateOf(initial.password) }
+    var from by remember { mutableStateOf(initial.from) }
+    var fromName by remember { mutableStateOf(initial.fromName) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    fun current() = SmtpSettings(host.trim(), port.trim().toIntOrNull() ?: 587, user.trim(), password, from.trim(), fromName.trim())
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDone() },
+        title = { Text("Mail settings") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("The account thank-you e-mails are sent from. For Gmail use smtp.gmail.com, port 587 and an App Password " +
+                    "(Google account > Security > 2-Step Verification > App passwords).", fontSize = 12.sp)
+                OutlinedTextField(host, { host = it }, label = { Text("SMTP server") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(port, { port = it.filter(Char::isDigit).take(5) }, label = { Text("Port (587 or 465)") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(user, { user = it }, label = { Text("Username / e-mail") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(password, { password = it }, label = { Text("Password / app password") }, singleLine = true,
+                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(from, { from = it }, label = { Text("Send from (blank = username)") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(fromName, { fromName = it }, label = { Text("Company name in the e-mail") }, singleLine = true,
+                    modifier = Modifier.fillMaxWidth())
+                status?.let { Text(it, fontSize = 13.sp, color = if (it.startsWith("Test mail sent")) PaperInk else Danger) }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = !busy && current().complete, onClick = {
+                val c = current()
+                if (!ThankYou.isValidEmail(c.user) && !ThankYou.isValidEmail(c.from)) {
+                    status = "Could not send: enter a full e-mail address (name@company.com) as the username."; return@TextButton
+                }
+                if (c.from.isNotBlank() && !ThankYou.isValidEmail(c.from)) {
+                    status = "Could not send: \"Send from\" must be a full e-mail address like name@company.com, or leave it blank."; return@TextButton
+                }
+                busy = true; status = "Sending test mail…"
+                scope.launch {
+                    val err = withContext(Dispatchers.IO) { try { ThankYou.sendTest(c); null } catch (e: Exception) { e.message ?: e.javaClass.simpleName } }
+                    busy = false
+                    if (err == null) { SmtpSettings.save(ctx, c); status = "Test mail sent to ${c.from.ifBlank { c.user }}. Settings saved." }
+                    else status = "Could not send: $err"
+                }
+            }) { Text(if (busy) "Please wait…" else "Save & send test") }
+        },
+        dismissButton = {
+            Row {
+                TextButton(enabled = !busy, onClick = { SmtpSettings.save(ctx, current()); onDone() }) { Text("Save only") }
+                TextButton(enabled = !busy, onClick = onDone) { Text("Close") }
+            }
+        })
+}
+
+val Color_F0C3B8 =androidx.compose.ui.graphics.Color(0xFFF0C3B8)
 
 @Composable
 fun Centered(content: @Composable ColumnScope.() -> Unit) =
@@ -549,7 +638,7 @@ fun PaperField(label: String, value: String, singleLine: Boolean = true, hint: S
 fun AdminPanel(visitors: List<Visitor>, deviceName: String, onDeviceName: (String) -> Unit,
                signedIn: String?, onSwitchUser: () -> Unit,
                onClose: () -> Unit, onExport: () -> Unit, onImport: () -> Unit,
-               onDelete: (Visitor) -> Unit, onClear: () -> Unit) {
+               onDelete: (Visitor) -> Unit, onClear: () -> Unit, onRetryThankYou: (Visitor) -> Unit) {
     var confirmClear by remember { mutableStateOf(false) }
     var clearText by remember { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<Visitor?>(null) }
@@ -605,6 +694,15 @@ fun AdminPanel(visitors: List<Visitor>, deviceName: String, onDeviceName: (Strin
                         if (follow.isNotBlank()) Text("Follow-up: $follow", fontSize = 12.sp, color = LineDim)
                         if (v.discussionNotes.isNotBlank())
                             Text(v.discussionNotes, fontSize = 12.sp, color = LineDim, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        when (v.thankYouStatus) {
+                            ThankYou.SENT -> Text("Thank-you mail sent " + fmt.format(Date(v.thankYouSentAt)), fontSize = 12.sp, color = Steel)
+                            ThankYou.QUEUED -> Text("Thank-you mail queued, sends when online", fontSize = 12.sp, color = Amber)
+                            ThankYou.PENDING -> Text("Thank-you mail not sent yet", fontSize = 12.sp, color = Amber)
+                            ThankYou.FAILED -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Thank-you mail failed", fontSize = 12.sp, color = Danger)
+                                TextButton({ onRetryThankYou(v) }) { Text("Retry", fontSize = 12.sp) }
+                            }
+                        }
                     }
                     IconButton({ pendingDelete = v }) { Icon(Icons.Default.Delete, "Delete", tint = Steel) }
                 }
