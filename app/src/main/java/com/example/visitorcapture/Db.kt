@@ -64,6 +64,7 @@ data class Employee(
 interface VisitorDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insert(v: Visitor): Long  // -1 if uid already exists
     @Delete suspend fun delete(v: Visitor)
+    @Update suspend fun update(v: Visitor)
     @Query("DELETE FROM visitors") suspend fun clear()
     @Query("UPDATE visitors SET additionalInterest = :text WHERE uid = :uid") suspend fun setAdditionalInterest(uid: String, text: String)
     @Query("UPDATE visitors SET notePhotoPaths = :paths WHERE uid = :uid") suspend fun setNotePhotos(uid: String, paths: String)

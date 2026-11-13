@@ -288,14 +288,7 @@ fun App() {
         }
     }
 
-    // Auto-reset the done screen after 15 s of inactivity, like the kiosk. Typing a note restarts the clock
-    // and allows 30 s, so the visitor is never cut off mid-sentence. The camera / picker pauses the clock,
-    // and each attached image restarts it.
-    LaunchedEffect(screen, extraNote, noteBusy, notePhotos) {
-        if (screen == Screen.Done && !noteBusy) {
-            delay(if (extraNote.isBlank() && notePhotos.isEmpty()) 15_000 else 30_000); reset()
-        }
-    }
+    // The Done screen stays open until staff press "Log next visitor now" (no auto-reset).
     // Save the note shortly after the last keystroke (reset() also saves it, so nothing is lost).
     LaunchedEffect(extraNote) { delay(700); persistExtra() }
 
@@ -514,7 +507,7 @@ fun App() {
                                     else -> "Saving…"
                                 }, color = Steel, fontSize = 12.sp)
                             }
-                            Text("Thanks for stopping by. Someone from our team will follow up. This screen resets shortly for the next visitor.",
+                            Text("Thanks for stopping by. Someone from our team will follow up. Tap \"Log next visitor now\" when you're done.",
                                 color = Steel, textAlign = TextAlign.Center)
                             SecondaryButton("Log next visitor now") { reset() }
                         }
@@ -531,6 +524,7 @@ fun App() {
                 signedIn = employee?.name, onSwitchUser = { showAdmin = false; screen = Screen.Login },
                 onClose = { showAdmin = false }, onExport = { exportData() },
                 onImport = { importPicker.launch(arrayOf("*/*")) },
+                onEdit = { v -> scope.launch { db.dao().update(v) } },
                 onDelete = { v ->
                     scope.launch {
                         db.dao().delete(v)
@@ -638,12 +632,88 @@ fun PaperField(label: String, value: String, singleLine: Boolean = true, hint: S
             focusedLabelColor = PaperInk.copy(alpha = 0.7f), unfocusedLabelColor = PaperInk.copy(alpha = 0.6f),
             cursorColor = Amber))
 
+/** Edit a saved record. The UID, visit time, photos and thank-you status are left untouched. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Unit) {
+    var name by remember { mutableStateOf(v.name) }
+    var title by remember { mutableStateOf(v.title) }
+    var company by remember { mutableStateOf(v.company) }
+    var email by remember { mutableStateOf(v.email) }
+    var phone by remember { mutableStateOf(v.phone) }
+    var address by remember { mutableStateOf(v.address) }
+    var state by remember { mutableStateOf(v.state) }
+    var country by remember { mutableStateOf(v.country) }
+    var customerType by remember { mutableStateOf(v.customerType) }
+    var market by remember { mutableStateOf(v.marketExposure) }
+    var other by remember { mutableStateOf(v.otherDetail) }
+    var interest by remember { mutableStateOf(v.additionalInterest) }
+    var outcomes by remember { mutableStateOf(v.leadOutcomes.split("; ").filter { it.isNotBlank() }.toSet()) }
+    var notes by remember { mutableStateOf(v.discussionNotes) }
+    var remark by remember { mutableStateOf(v.remarks) }
+    var remarkOther by remember { mutableStateOf(v.remarksOther) }
+    var followNote by remember { mutableStateOf(v.followUpNote) }
+    @Composable fun field(label: String, value: String, multi: Boolean = false, set: (String) -> Unit) =
+        OutlinedTextField(value, set, label = { Text(label) }, singleLine = !multi, minLines = if (multi) 2 else 1,
+            modifier = Modifier.fillMaxWidth())
+    @Composable fun chips(options: List<String>, selected: (String) -> Boolean, pick: (String) -> Unit) =
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            options.forEach { o -> FilterChip(selected(o), { pick(o) }, label = { Text(o) }) }
+        }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit visitor") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("ID: ${v.uid}", fontSize = 12.sp, color = Steel)
+                field("Name", name) { name = it }
+                field("Title", title) { title = it }
+                field("Company", company) { company = it }
+                field("Email", email) { email = it }
+                field("Phone", phone) { phone = it }
+                field("Address", address, true) { address = it }
+                field("State", state) { state = it }
+                field("Country", country) { country = it }
+                Text("Customer type", fontSize = 12.sp, color = Steel)
+                chips(CUSTOMER_TYPES, { it == customerType }) { customerType = if (customerType == it) "" else it }
+                Text("Market exposure", fontSize = 12.sp, color = Steel)
+                chips(MARKET_EXPOSURE, { it == market }) { market = if (market == it) "" else it }
+                field("Other product detail", other, true) { other = it }
+                field("Also interested in", interest, true) { interest = it }
+                Text("Lead outcome", fontSize = 12.sp, color = Steel)
+                chips(LEAD_OUTCOMES, { it in outcomes }) { outcomes = if (it in outcomes) outcomes - it else outcomes + it }
+                field("Discussion notes", notes, true) { notes = it }
+                Text("Remarks", fontSize = 12.sp, color = Steel)
+                chips(REMARK_OPTIONS, { it == remark }) { remark = if (remark == it) "" else it }
+                if (remark == "Others") field("Remarks (other)", remarkOther) { remarkOther = it }
+                if (v.followUpAction == "Remarks") field("Follow-up note", followNote, true) { followNote = it }
+            }
+        },
+        confirmButton = {
+            TextButton({
+                val mail = email.trim()
+                onSave(v.copy(name = name.trim(), title = title.trim(), company = company.trim(), email = mail, phone = phone.trim(),
+                    address = address.trim(), state = state.trim(), country = country.trim(),
+                    customerType = customerType, marketExposure = market, otherDetail = other.trim(),
+                    additionalInterest = interest.trim(),
+                    leadOutcomes = LEAD_OUTCOMES.filter { it in outcomes }.joinToString("; "),
+                    discussionNotes = notes.trim(), remarks = remark,
+                    remarksOther = if (remark == "Others") remarkOther.trim() else "",
+                    followUpNote = if (v.followUpAction == "Remarks") followNote.trim() else v.followUpNote,
+                    // a corrected e-mail on a record that had none becomes mailable
+                    thankYouStatus = if (v.thankYouStatus == "" && ThankYou.isValidEmail(mail)) ThankYou.PENDING else v.thankYouStatus))
+            }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onDismiss) { Text("Cancel") } })
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AdminPanel(visitors: List<Visitor>, deviceName: String, onDeviceName: (String) -> Unit,
                signedIn: String?, onSwitchUser: () -> Unit,
                onClose: () -> Unit, onExport: () -> Unit, onImport: () -> Unit,
-               onDelete: (Visitor) -> Unit, onClear: () -> Unit, onRetryThankYou: (Visitor) -> Unit) {
+               onEdit: (Visitor) -> Unit, onDelete: (Visitor) -> Unit, onClear: () -> Unit, onRetryThankYou: (Visitor) -> Unit) {
+    var editing by remember { mutableStateOf<Visitor?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     var clearText by remember { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<Visitor?>(null) }
@@ -709,11 +779,13 @@ fun AdminPanel(visitors: List<Visitor>, deviceName: String, onDeviceName: (Strin
                             }
                         }
                     }
+                    IconButton({ editing = v }) { Icon(Icons.Default.Edit, "Edit", tint = Steel) }
                     IconButton({ pendingDelete = v }) { Icon(Icons.Default.Delete, "Delete", tint = Steel) }
                 }
             }
         }
     }
+    editing?.let { v -> EditVisitorDialog(v, onDismiss = { editing = null }, onSave = { onEdit(it); editing = null }) }
     pendingDelete?.let { v ->
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
