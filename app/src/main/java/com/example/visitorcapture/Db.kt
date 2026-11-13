@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.Flow
 @Entity(tableName = "visitors", indices = [Index(value = ["uid"], unique = true)])
 data class Visitor(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val uid: String,            // globally unique (UUID), used to merge devices
+    val uid: String,            // globally unique, e.g. SIV-13-0922-0001 (see UidGen); used to merge devices
     val deviceName: String,
     val name: String,
     val title: String,
@@ -73,6 +73,19 @@ interface VisitorDao {
     @Query("UPDATE visitors SET thankYouStatus = :status, thankYouSentAt = :at WHERE uid = :uid")
     suspend fun markThankYou(uid: String, status: String, at: Long)
     @Query("SELECT * FROM visitors ORDER BY createdAt DESC") fun all(): Flow<List<Visitor>>
+    @Query("SELECT COUNT(*) FROM visitors WHERE uid LIKE :prefix || '%'") suspend fun countUidPrefix(prefix: String): Int
+}
+
+/** Readable UID: STAFF3-dd-HHmm-NNNN, e.g. SIV-13-0922-0001(also the photo file name in exports). */
+object UidGen {
+    fun prefix(staffName: String, deviceName: String, at: Long): String {
+        fun letters(s: String) = java.text.Normalizer.normalize(s, java.text.Normalizer.Form.NFD)
+            .filter { it in 'A'..'Z' || it in 'a'..'z' }.take(3).uppercase()
+        val code = letters(staffName).ifEmpty { letters(deviceName) }.ifEmpty { "VIS" }.padEnd(3, 'X')
+        val stamp = java.text.SimpleDateFormat("dd-HHmm", java.util.Locale.US).format(java.util.Date(at))
+        return "$code-$stamp-"
+    }
+    fun withSeq(prefix: String, existing: Int) = prefix + (existing + 1).toString().padStart(4, '0')
 }
 
 @Dao

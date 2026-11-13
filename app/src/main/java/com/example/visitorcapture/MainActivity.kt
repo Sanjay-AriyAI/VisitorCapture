@@ -242,7 +242,8 @@ fun App() {
         val e = employee
         // Fields of hidden sections are dropped, so a changed mind never leaves stale values behind.
         val follow = if (form.needsFollowUp) form.followUpAction else null
-        val v = Visitor(uid = UUID.randomUUID().toString(), deviceName = deviceName,
+        val uidPrefix = UidGen.prefix(e?.name.orEmpty(), deviceName, at)
+        val v = Visitor(uid = uidPrefix, deviceName = deviceName,
             name = form.name, title = form.title, company = form.company, email = form.email, phone = form.phone,
             address = form.address.trim(), state = form.state.trim(), country = form.country.trim(),
             customerType = form.customerType ?: "", marketExposure = form.marketExposure ?: "",
@@ -258,8 +259,12 @@ fun App() {
             followUpAt = if (follow != null && follow != "Remarks") form.followUpAt else 0L,
             followUpNote = if (follow == "Remarks") form.followUpNote.trim() else "",
             thankYouStatus = ThankYou.initialStatus(form.email))
-        lastUid = v.uid; extraNote = ""; extraSaved = ""
-        scope.launch { db.dao().insert(v) }   // the thank-you mail waits (PENDING) until staff press "Send thank-you mails"
+        extraNote = ""; extraSaved = ""
+        scope.launch {   // the thank-you mail waits (PENDING) until staff press "Send thank-you mails"
+            val uid = UidGen.withSeq(uidPrefix, db.dao().countUidPrefix(uidPrefix))
+            lastUid = uid
+            db.dao().insert(v.copy(uid = uid))
+        }
     }
 
     fun signIn(info: EmployeeInfo) {
