@@ -43,7 +43,7 @@ object Catalog {
     /** A make with no retrofit listed yet: a single chip with the make's name, so the visitor can still record it. */
     private fun bare(make: String) = sec(make, make)
 
-    private const val THERMISTOR = "Thermistor production unit"
+    private const val THERMISTOR = "Thermistor protection unit"
     private const val EARTH = "Earth stop motion unit"
     private const val PHOTO = "Digital photo master conversion"
     private const val FEATHER_SW = "Feather-touch switch conversion"
