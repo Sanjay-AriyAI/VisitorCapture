@@ -1,7 +1,7 @@
 package com.example.visitorcapture
 
 import android.content.SharedPreferences
-import android.widget.Toast
+
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -34,12 +34,13 @@ data class AppSettings(
     val skipScan: Boolean = false,        // start each visit with manual entry instead of the card camera
     val defaultCountry: String = "",      // filled in when the card does not show a country
     val confirmAbandon: Boolean = true,   // ask before "Start new visit" throws away a visit in progress
-    val autoThankYou: Boolean = false     // queue the thank-you mail as soon as a visit is saved
+    val autoThankYou: Boolean = false,    // queue the thank-you mail as soon as a visit is saved
+    val theme: ThemeMode = ThemeMode.Dark // appearance: System / Dark / Light
 ) {
     fun save(p: SharedPreferences) = p.edit()
         .putBoolean("keep_awake", keepAwake).putBoolean("skip_scan", skipScan)
         .putString("default_country", defaultCountry).putBoolean("confirm_abandon", confirmAbandon)
-        .putBoolean("auto_thankyou", autoThankYou).apply()
+        .putBoolean("auto_thankyou", autoThankYou).putString("theme", theme.name).apply()
 
     companion object {
         fun load(p: SharedPreferences) = AppSettings(
@@ -47,7 +48,34 @@ data class AppSettings(
             skipScan = p.getBoolean("skip_scan", false),
             defaultCountry = p.getString("default_country", "").orEmpty(),
             confirmAbandon = p.getBoolean("confirm_abandon", true),
-            autoThankYou = p.getBoolean("auto_thankyou", false))
+            autoThankYou = p.getBoolean("auto_thankyou", false),
+            theme = ThemeMode.values().firstOrNull { it.name == p.getString("theme", null) } ?: ThemeMode.Dark)
+    }
+}
+
+/** System · Dark · Light picker at the top of Settings. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AppearancePicker(mode: ThemeMode, onPick: (ThemeMode) -> Unit) {
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(16.dp)) {
+        ThemeMode.values().forEachIndexed { i, m ->
+            SegmentedButton(selected = mode == m,
+                onClick = { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); onPick(m) },
+                shape = SegmentedButtonDefaults.itemShape(i, ThemeMode.values().size),
+                icon = {
+                    SegmentedButtonDefaults.Icon(mode == m) {
+                        Icon(when (m) { ThemeMode.System -> Icons.Default.BrightnessAuto
+                            ThemeMode.Dark -> Icons.Default.DarkMode; ThemeMode.Light -> Icons.Default.LightMode },
+                            null, Modifier.size(SegmentedButtonDefaults.IconSize))
+                    }
+                },
+                colors = SegmentedButtonDefaults.colors(
+                    activeContainerColor = Amber, activeContentColor = OnAmber, activeBorderColor = Amber,
+                    inactiveContainerColor = Panel, inactiveContentColor = LineC,
+                    inactiveBorderColor = if (IsDark) LineDim.copy(alpha = 0.35f) else Outline)
+            ) { Text(m.label, fontWeight = FontWeight.SemiBold) }
+        }
     }
 }
 
@@ -63,6 +91,9 @@ fun SettingsScreen(
     settings: AppSettings, onChange: (AppSettings) -> Unit,
     mailConfigured: Boolean, onOpen: (AppPage) -> Unit, onBack: () -> Unit
 ) = SectionPage("Settings", onBack) {
+    SectionHeader("Appearance")
+    SettingsGroup { AppearancePicker(settings.theme) { onChange(settings.copy(theme = it)) } }
+
     SectionHeader("Device")
     SettingsGroup {
         Box(Modifier.padding(16.dp)) {
@@ -148,7 +179,7 @@ fun ProfileScreen(employee: EmployeeInfo?, visitors: List<Visitor>, onSwitchUser
             Text(employee.name, fontSize = 24.sp, fontWeight = FontWeight.Bold, fontFamily = Display, color = LineC,
                 textAlign = TextAlign.Center, modifier = Modifier.padding(top = 12.dp))
             if (employee.title.isNotBlank()) Text(employee.title, color = LineDim, textAlign = TextAlign.Center)
-            if (employee.company.isNotBlank()) Text(employee.company, color = Amber, fontSize = 14.sp, textAlign = TextAlign.Center)
+            if (employee.company.isNotBlank()) Text(employee.company, color = AmberText, fontSize = 14.sp, textAlign = TextAlign.Center)
         }
         Row(Modifier.fillMaxWidth().padding(top = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             StatTile("Visits today", mine.count { it.createdAt >= today }, Modifier.weight(1f))
@@ -190,36 +221,25 @@ fun EditProfileDialog(e: EmployeeInfo, onDismiss: () -> Unit, onSave: (EmployeeI
     val canSave = name.isNotBlank() && emailOk
     @Composable fun field(label: String, value: String, icon: ImageVector, error: String? = null, set: (String) -> Unit) =
         OutlinedTextField(value, set, label = { Text(label) }, singleLine = true, leadingIcon = { Icon(icon, null) },
-            isError = error != null, supportingText = error?.let { { Text(it) } }, modifier = Modifier.fillMaxWidth())
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { Icon(Icons.Default.Edit, null) },
-        title = { Text("Edit profile") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                field("Name", name, Icons.Default.Person, if (name.isBlank()) "Name is required" else null) { name = it }
-                field("Job title", title, Icons.Default.Badge) { title = it }
-                field("Company", company, Icons.Default.Business) { company = it }
-                field("E-mail", email, Icons.Default.Email, if (!emailOk) "Enter a full e-mail like name@company.com" else null) { email = it }
-                field("Phone", phone, Icons.Default.Phone) { phone = it }
-                Text("Visits you attended on this phone are updated too.", fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = canSave, onClick = {
-                onSave(e.copy(name = name.trim(), title = title.trim(), company = company.trim(),
-                    email = email.trim(), phone = phone.trim()))
-            }) { Text("Save") }
-        },
-        dismissButton = { TextButton(onDismiss) { Text("Cancel") } })
+            isError = error != null, supportingText = error?.let { { Text(it) } }, modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp), colors = darkFieldColors(filled = false))
+    FormSheet("Edit profile", onDismiss, icon = Icons.Default.Edit, saveEnabled = canSave, onSave = {
+        onSave(e.copy(name = name.trim(), title = title.trim(), company = company.trim(), email = email.trim(), phone = phone.trim()))
+    }) {
+        field("Name", name, Icons.Default.Person, if (name.isBlank()) "Name is required" else null) { name = it }
+        field("Job title", title, Icons.Default.Badge) { title = it }
+        field("Company", company, Icons.Default.Business) { company = it }
+        field("E-mail", email, Icons.Default.Email, if (!emailOk) "Enter a full e-mail like name@company.com" else null) { email = it }
+        field("Phone", phone, Icons.Default.Phone) { phone = it }
+        Text("Visits you attended on this phone are updated too.", fontSize = 12.sp, color = Steel)
+    }
 }
 
 @Composable
 fun StatTile(label: String, value: Int, modifier: Modifier = Modifier, color: androidx.compose.ui.graphics.Color = LineC) =
-    Column(modifier.clip(RoundedCornerShape(12.dp)).background(Panel).padding(horizontal = 14.dp, vertical = 12.dp)) {
-        Text(value.toString(), fontSize = 26.sp, fontWeight = FontWeight.Bold, color = color)
-        Text(label, fontSize = 12.sp, color = Steel)
+    Column(modifier.cardBorder().clip(CardShape).background(Panel).padding(horizontal = 14.dp, vertical = 12.dp)) {
+        Text(value.toString(), fontSize = 26.sp, fontWeight = FontWeight.ExtraBold, color = color)
+        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Steel)
     }
 
 // ---------------------------------------------------------------- About
@@ -248,9 +268,10 @@ fun AboutScreen(deviceName: String, visitorCount: Int, onBack: () -> Unit) = Sec
 
 /** Sender account for the thank-you mail plus the send queue. "Save & test" mails the account itself, so mistakes show up at once. */
 @Composable
-fun MailSettingsScreen(visitors: List<Visitor>, onBack: () -> Unit) {
+fun MailSettingsScreen(visitors: List<Visitor>, onBack: () -> Unit, onSaved: (message: String, tested: Boolean) -> Unit) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
+    val snackbar = LocalSnackbar.current
     val initial = remember { SmtpSettings.load(ctx) }
     var host by remember { mutableStateOf(initial.host.ifBlank { "smtp.gmail.com" }) }
     var port by remember { mutableStateOf(initial.port.toString()) }
@@ -290,11 +311,11 @@ fun MailSettingsScreen(visitors: List<Visitor>, onBack: () -> Unit) {
             StatTile("Failed", failed, Modifier.weight(1f), if (failed > 0) Color_F0C3B8 else LineC)
         }
         if (unsent > 0) PrimaryButton("Send thank-you mails ($unsent)", modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
-            if (!configured) Toast.makeText(ctx, "Save the mail account first", Toast.LENGTH_LONG).show()
+            if (!configured) scope.launch { snackbar.showSnackbar("Save the mail account first") }
             else scope.launch {
                 val n = AppDb.get(ctx).dao().queueAllThankYou()
                 ThankYouWorker.enqueue(ctx)
-                Toast.makeText(ctx, "$n thank-you mail(s) queued. They send as soon as the phone is online.", Toast.LENGTH_LONG).show()
+                snackbar.showSnackbar("$n thank-you mail(s) queued. They send as soon as the phone is online.")
             }
         }
         if (failed > 0) Text("Failed mails can be retried from Visitor logs (open the visitor card).",
@@ -323,14 +344,15 @@ fun MailSettingsScreen(visitors: List<Visitor>, onBack: () -> Unit) {
             }
         }
         status?.let { (msg, err) ->
-            Text(msg, fontSize = 13.sp, color = if (err) Color_F0C3B8 else Amber, modifier = Modifier.padding(start = 4.dp, top = 10.dp))
+            Text(msg, fontSize = 13.sp, color = if (err) Color_F0C3B8 else AmberText, modifier = Modifier.padding(start = 4.dp, top = 10.dp))
         }
         Row(Modifier.fillMaxWidth().padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically) {
             SecondaryButton("Save", Modifier.weight(1f)) {
                 if (busy) return@SecondaryButton
                 val c = current(); SmtpSettings.save(ctx, c); configured = c.complete
-                status = (if (c.complete) "Saved." else "Saved, but server, username and password are all needed to send.") to !c.complete
+                // saved: close Mail settings and go home; the message is shown there
+                onSaved(if (c.complete) "Mail settings saved" else "Saved. Server, username and password are all needed to send mails.", false)
             }
             PrimaryButton(if (busy) "Sending…" else "Save & test", enabled = !busy && current().complete, modifier = Modifier.weight(1f)) {
                 val c = current()
@@ -344,7 +366,8 @@ fun MailSettingsScreen(visitors: List<Visitor>, onBack: () -> Unit) {
                 scope.launch {
                     val err = withContext(Dispatchers.IO) { try { ThankYou.sendTest(c); null } catch (e: Exception) { e.message ?: e.javaClass.simpleName } }
                     busy = false
-                    if (err == null) { SmtpSettings.save(ctx, c); configured = true; status = "Test mail sent to ${c.from.ifBlank { c.user }}. Settings saved." to false }
+                    // only a successful test closes the page; a failure stays here with the error
+                    if (err == null) { SmtpSettings.save(ctx, c); configured = true; status = null; onSaved("A test mail was sent to ${c.from.ifBlank { c.user }}. Thank-you mails will be sent from this account.", true) }
                     else status = "Could not send: $err" to true
                 }
             }

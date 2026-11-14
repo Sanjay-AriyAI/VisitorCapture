@@ -64,7 +64,7 @@ fun CatalogScreen(
                         if (leaf) {
                             Icon(Icons.Default.Check, null, tint = if (n > 0) Amber else Steel.copy(alpha = 0.35f))
                         } else if (n > 0) {
-                            Text("$n", color = NavyDeep, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                            Text("$n", color = OnAmber, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                                 modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Amber).padding(horizontal = 9.dp, vertical = 2.dp))
                             Spacer(Modifier.width(8.dp))
                         }
@@ -94,7 +94,7 @@ fun CatalogScreen(
             Modifier.fillMaxWidth().background(NavyDeep).padding(horizontal = 20.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("${selected.count { it.startsWith("$product > ") }} selected", color = Amber, fontWeight = FontWeight.SemiBold)
+            Text("${selected.count { it.startsWith("$product > ") }} selected", color = AmberText, fontWeight = FontWeight.SemiBold)
             PrimaryButton("Done") { onDone() }
         }
     }

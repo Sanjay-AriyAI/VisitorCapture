@@ -10,9 +10,13 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.core.view.WindowCompat
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -27,6 +31,13 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -77,7 +88,8 @@ data class Form(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { MaterialTheme { App() } }
+        enableEdgeToEdge()
+        setContent { App() }
     }
 }
 
@@ -98,8 +110,10 @@ fun App() {
     var loggedAt by remember { mutableLongStateOf(0L) }                       // visit time shown on the Done screen
     var section by remember { mutableStateOf(AppPage.Visit) }                 // page picked from the side menu / gear
     val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val snackbar = remember { SnackbarHostState() }                          // replaces Toasts
     var appSettings by remember { mutableStateOf(AppSettings.load(prefs)) }
     var confirmDiscard by remember { mutableStateOf(false) }
+    var mailSuccess by remember { mutableStateOf<String?>(null) }                // "test mail sent" pop-up on the home screen
     var catalogProduct by remember { mutableStateOf("Mechanical Spares") }
     var form by remember { mutableStateOf(Form()) }
     var photoFile by remember { mutableStateOf<File?>(null) }
@@ -300,7 +314,7 @@ fun App() {
             }
             db.dao().renameStaff(old.key, updated.key, updated.name, updated.title, updated.email, updated.phone)
         }
-        android.widget.Toast.makeText(ctx, "Profile updated", android.widget.Toast.LENGTH_SHORT).show()
+        scope.launch { snackbar.showSnackbar("Profile updated") }
     }
 
     fun exportData() {
@@ -359,7 +373,17 @@ fun App() {
         }
     }
 
-    CompositionLocalProvider(LocalContentColor provides LineC) {
+    // ---- appearance: theme + status/navigation bar icons that match it ----
+    val dark = resolveDark(appSettings.theme, isSystemInDarkTheme())
+    SideEffect {
+        val window = (ctx as? android.app.Activity)?.window ?: return@SideEffect
+        WindowCompat.getInsetsController(window, view).apply {
+            isAppearanceLightStatusBars = !dark; isAppearanceLightNavigationBars = !dark
+        }
+    }
+
+    VisitorTheme(dark) {
+    CompositionLocalProvider(LocalContentColor provides LineC, LocalSnackbar provides snackbar) {
       ModalNavigationDrawer(
         drawerState = drawerState,
         gesturesEnabled = drawerState.isOpen,   // swipe closes it; an edge swipe never opens it by accident mid-visit
@@ -370,7 +394,7 @@ fun App() {
                 visitInProgress = midVisit || screen == Screen.Done,
                 onSelect = { go(it) }, onNewVisit = { startNewVisit() }, onSwitchUser = { switchUser() })
         }) {
-        Box(Modifier.fillMaxSize().background(Navy).systemBarsPadding()) {
+        Box(Modifier.fillMaxSize().background(Navy).systemBarsPadding().imePadding()) {   // content shrinks above the keyboard
           AnimatedContent(section, label = "section", transitionSpec = {
               val dir = if (targetState.ordinal >= initialState.ordinal) 1 else -1
               (fadeIn(tween(220)) + slideInHorizontally(tween(260)) { dir * it / 8 }) togetherWith fadeOut(tween(140))
@@ -381,9 +405,14 @@ fun App() {
                 onExport = { exportData() }, onImport = { importPicker.launch(arrayOf("*/*")) },
                 onEdit = { v -> scope.launch { db.dao().update(v) } },
                 onDelete = { v ->
+                    // Removed at once with an Undo; photos are only deleted once the snackbar goes away without Undo.
                     scope.launch {
                         db.dao().delete(v)
-                        withContext(Dispatchers.IO) { v.cardPhotoPath?.let { File(it).delete() }; Sync.notePhotos(v).forEach { it.delete() } }
+                        snackbar.currentSnackbarData?.dismiss()
+                        val r = snackbar.showSnackbar("${v.name.ifBlank { "Visitor" }} deleted", actionLabel = "Undo",
+                            duration = SnackbarDuration.Long)
+                        if (r == SnackbarResult.ActionPerformed) db.dao().insert(v)
+                        else withContext(Dispatchers.IO) { v.cardPhotoPath?.let { File(it).delete() }; Sync.notePhotos(v).forEach { it.delete() } }
                     }
                 },
                 onClear = { scope.launch { db.dao().clear(); File(ctx.filesDir, "cards").deleteRecursively() } },
@@ -392,7 +421,10 @@ fun App() {
                         if (ThankYou.isValidEmail(v.email)) { db.dao().markThankYou(v.uid, ThankYou.QUEUED, 0); ThankYouWorker.enqueue(ctx) }
                     }
                 })
-            AppPage.Mail -> MailSettingsScreen(visitors, onBack = { section = AppPage.Visit })
+            AppPage.Mail -> MailSettingsScreen(visitors, onBack = { section = AppPage.Visit }, onSaved = { msg, tested ->
+                section = AppPage.Visit                                   // back to the home screen
+                if (tested) mailSuccess = msg else scope.launch { snackbar.showSnackbar(msg) }
+            })
             AppPage.Settings -> SettingsScreen(deviceName,
                 onDeviceName = { deviceName = it; prefs.edit().putString("device", it).apply() },
                 settings = appSettings, onChange = { appSettings = it; it.save(prefs) },
@@ -409,94 +441,122 @@ fun App() {
                     if (menuAvailable) IconButton({ section = AppPage.Settings }) { Icon(Icons.Default.Settings, "Settings", tint = Steel) }
                 }
                 Box(Modifier.weight(1f).fillMaxWidth()) {
-                    when (screen) {
+                  // Each step slides in from the side it comes from: forward from the right, back from the left.
+                  AnimatedContent(screen, label = "visit", transitionSpec = {
+                      val fwd = targetState.ordinal >= initialState.ordinal
+                      (slideInHorizontally(tween(340, easing = FastOutSlowInEasing)) { if (fwd) it / 4 else -it / 4 } +
+                          fadeIn(tween(260, 60))) togetherWith
+                          (slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { if (fwd) -it / 6 else it / 6 } +
+                              fadeOut(tween(160)))
+                  }) { current ->
+                    when (current) {
                         Screen.Login -> LoginScreen(employee, onLogin = { signIn(it) },
                             onCancel = if (employee != null) ({ screen = Screen.Welcome }) else null)
 
-                        Screen.Welcome -> Centered {
-                            NarenLogo(Modifier.width(260.dp))
-                            Text("Welcome to\nour stand", fontSize = 44.sp, fontWeight = FontWeight.Bold,
-                                fontFamily = Display, textAlign = TextAlign.Center, lineHeight = 46.sp)
-                            Text("Scan your business card and we'll log your visit & interests in under a minute.",
-                                color = Steel, textAlign = TextAlign.Center)
-                            if (appSettings.skipScan) {
-                                PrimaryButton("Enter visitor details") { startVisit(manual = true) }
-                                LinkButton("Scan a business card instead") { startVisit(manual = false) }
-                            } else PrimaryButton("Scan business card") { startVisit(manual = false) }
-                            employee?.let { e ->
-                                Text("Attended by ${e.name}" + if (e.title.isNotBlank()) ", ${e.title}" else "",
-                                    color = Amber, fontSize = 14.sp, textAlign = TextAlign.Center)
-                                LinkButton("Not you? Switch user") { screen = Screen.Login }
+                        Screen.Welcome -> Box(Modifier.fillMaxSize()) {
+                            // soft amber glow behind the hero
+                            Box(Modifier.matchParentSize().background(Brush.radialGradient(
+                                listOf(Amber.copy(alpha = if (IsDark) 0.18f else 0.14f), androidx.compose.ui.graphics.Color.Transparent),
+                                radius = 720f)))
+                            Centered {
+                                NarenLogo(Modifier.width(220.dp))
+                                Text("Welcome to\nour stand", style = MaterialTheme.typography.displayMedium,
+                                    textAlign = TextAlign.Center, color = LineC)
+                                Text("Scan your business card and we'll log your visit & interests in under a minute.",
+                                    color = Steel, textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyLarge)
+                                if (appSettings.skipScan) {
+                                    PrimaryButton("Enter visitor details", icon = Icons.Default.EditNote) { startVisit(manual = true) }
+                                    LinkButton("Scan a business card instead") { startVisit(manual = false) }
+                                } else PrimaryButton("Scan business card", icon = Icons.Default.CameraAlt) { startVisit(manual = false) }
+                                // at-a-glance numbers for staff; the mail tile opens Mail settings
+                                val today = remember(visitors) { startOfToday() }
+                                val unsent = visitors.count { it.thankYouStatus == ThankYou.PENDING }
+                                val failed = visitors.count { it.thankYouStatus == ThankYou.FAILED }
+                                Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    StatChip("Today", visitors.count { it.createdAt >= today }, Modifier.weight(1f)) {
+                                        section = AppPage.Logs
+                                    }
+                                    StatChip("All visitors", visitors.size, Modifier.weight(1f)) { section = AppPage.Logs }
+                                    StatChip(if (failed > 0) "$failed mail failed" else "Mails to send", unsent + failed,
+                                        Modifier.weight(1f), highlight = unsent + failed > 0) {
+                                        section = AppPage.Mail
+                                    }
+                                }
                             }
-                            // Thank-you mails are sent from Mail settings (side menu); this is just a quiet reminder.
-                            val unsent = visitors.count { it.thankYouStatus == ThankYou.PENDING }
-                            val failed = visitors.count { it.thankYouStatus == ThankYou.FAILED }
-                            if (unsent > 0 || failed > 0) LinkButton(listOfNotNull(
-                                if (unsent > 0) "$unsent thank-you mail(s) to send" else null,
-                                if (failed > 0) "$failed failed" else null).joinToString(" · ") + "  ›") { section = AppPage.Mail }
                         }
 
                         Screen.Capture -> Centered {
-                            Text("Photograph the card", fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
+                            Text("Photograph the card", style = MaterialTheme.typography.headlineMedium, color = LineC)
                             Text("Lay it flat, good light, fill the frame.", color = Steel)
-                            Box(Modifier.fillMaxWidth().aspectRatio(1.6f).clip(RoundedCornerShape(10.dp))
-                                .background(Panel).border(2.dp, LineDim, RoundedCornerShape(10.dp)),
-                                contentAlignment = Alignment.Center) {
+                            Box(Modifier.fillMaxWidth().aspectRatio(1.6f).clip(CardShape)
+                                .background(if (IsDark) NavyDeep else androidx.compose.ui.graphics.Color(0xFFE6EBF1))
+                                .viewfinder(Amber), contentAlignment = Alignment.Center) {
                                 if (photoTaken && photoFile != null)
                                     AsyncImage(photoFile, "Card", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                                else Text("No photo yet", color = Steel)
+                                else Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Icon(Icons.Default.CreditCard, null, tint = Steel, modifier = Modifier.size(44.dp))
+                                    Text("No photo yet", color = Steel)
+                                }
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                SecondaryButton("Back") { screen = Screen.Welcome }
-                                if (photoTaken) PrimaryButton("Use this photo") { photoFile?.let { runOcr(it) } }
-                                else PrimaryButton("Open camera") { openCamera() }
+                                SecondaryButton("Back", icon = Icons.AutoMirrored.Filled.ArrowBack) { screen = Screen.Welcome }
+                                if (photoTaken) PrimaryButton("Use photo", icon = Icons.Default.Check) { photoFile?.let { runOcr(it) } }
+                                else PrimaryButton("Open camera", icon = Icons.Default.CameraAlt) { openCamera() }
                             }
                             if (photoTaken) LinkButton("Retake") { openCamera() }
                             LinkButton("Skip scan, enter details manually") { photoFile = null; photoTaken = false; ocrError = false; fieldHints = emptyMap(); screen = Screen.Details }
                         }
 
                         Screen.Processing -> Centered {
-                            CircularProgressIndicator(color = Amber)
-                            Text("Reading the card…", color = Steel)
+                            Box(Modifier.fillMaxWidth().aspectRatio(1.6f).clip(CardShape).background(NavyDeep)
+                                .scanSweep(Amber).viewfinder(Amber), contentAlignment = Alignment.Center) {
+                                photoFile?.let { AsyncImage(it, "Card", Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alpha = 0.85f) }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(20.dp), color = Amber, strokeWidth = 2.5.dp)
+                                Spacer(Modifier.width(12.dp))
+                                Text("Reading the card…", style = MaterialTheme.typography.titleMedium, color = LineC)
+                            }
+                            Text("Name, company, phone and e-mail are picked up automatically.", color = Steel, textAlign = TextAlign.Center)
                         }
 
                         Screen.Details -> Scrolling {
-                            if (ocrError) Text("Couldn't auto-read the card. Fields left blank, just fill them in.",
-                                color = Color_F0C3B8, modifier = Modifier.fillMaxWidth().clip(Shape6)
-                                    .background(Danger.copy(alpha = 0.15f)).border(1.dp, Danger, Shape6).padding(12.dp))
-                            CompositionLocalProvider(LocalContentColor provides PaperInk) {
-                                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Paper).padding(22.dp),
-                                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Text("Confirm details", fontSize = 24.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
-                                    Text("We prefilled what we could read. Fix anything that's off.", fontSize = 13.sp, color = PaperInk.copy(alpha = 0.6f))
-                                    if (photoTaken && photoFile != null)
-                                        AsyncImage(photoFile, "Card", Modifier.width(140.dp).aspectRatio(1.6f).clip(RoundedCornerShape(5.dp)),
-                                            contentScale = ContentScale.Crop)
-                                    // Debug-only "show scanned text" toggle, disabled for now.
-                                    // if (isDebugBuild && ocrRaw.isNotEmpty()) {
-                                    //     TextButton(onClick = { showRaw = !showRaw }) {
-                                    //         Text(if (showRaw) "Hide scanned text (debug)" else "Show scanned text (debug)", color = PaperHint, fontSize = 12.sp)
-                                    //     }
-                                    //     if (showRaw) Text(ocrRaw, fontSize = 11.sp, color = PaperInk.copy(alpha = 0.8f),
-                                    //         modifier = Modifier.fillMaxWidth().background(PaperLine.copy(alpha = 0.3f)).padding(8.dp))
-                                    // }
-                                    if (fieldHints.isNotEmpty()) Text("Fields marked in amber need a quick check against the card.",
-                                        fontSize = 12.sp, color = PaperHint)
-                                    PaperField("Full name", form.name, hint = fieldHints["name"]) { form = form.copy(name = it); fieldHints = fieldHints - "name" }
-                                    PaperField("Job title", form.title, hint = fieldHints["title"]) { form = form.copy(title = it); fieldHints = fieldHints - "title" }
-                                    PaperField("Company", form.company, hint = fieldHints["company"]) { form = form.copy(company = it); fieldHints = fieldHints - "company" }
-                                    PaperField("Phone", form.phone, hint = fieldHints["phone"]) { form = form.copy(phone = it); fieldHints = fieldHints - "phone" }
-                                    PaperField("Email", form.email, hint = fieldHints["email"]) { form = form.copy(email = it); fieldHints = fieldHints - "email" }
-                                    PaperField("Address", form.address, singleLine = false, hint = fieldHints["address"]) { form = form.copy(address = it); fieldHints = fieldHints - "address" }
-                                    PaperField("State / Province", form.state, hint = fieldHints["state"]) { form = form.copy(state = it); fieldHints = fieldHints - "state" }
-                                    PaperField("Country (if applicable)", form.country) { form = form.copy(country = it) }
+                            // header: title + the scanned card, if there is one
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("Confirm details", style = MaterialTheme.typography.headlineMedium, color = LineC)
+                                    Text(if (photoTaken) "We prefilled what we could read. Fix anything that's off."
+                                        else "Type in the visitor's details.", fontSize = 14.sp, color = Steel)
+                                }
+                                if (photoTaken && photoFile != null) {
+                                    Spacer(Modifier.width(12.dp))
+                                    AsyncImage(photoFile, "Scanned card", Modifier.width(96.dp).aspectRatio(1.6f).clip(RoundedCornerShape(10.dp))
+                                        .border(1.5.dp, Amber.copy(alpha = 0.6f), RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
+                                }
+                            }
+                            if (ocrError) Notice(Icons.Default.ErrorOutline, "Couldn't auto-read the card. Fields are blank, just fill them in.", Danger, Color_F0C3B8)
+                            if (fieldHints.isNotEmpty()) Notice(Icons.Default.Info, "Fields outlined in amber need a quick check against the card.", Amber, AmberText)
+
+                            FormSection("Person", Icons.Default.Person) {
+                                PaperField("Full name", form.name, Icons.Default.Badge, hint = fieldHints["name"], caps = KeyboardCapitalization.Words) { form = form.copy(name = it); fieldHints = fieldHints - "name" }
+                                PaperField("Job title", form.title, Icons.Default.Work, hint = fieldHints["title"], caps = KeyboardCapitalization.Words) { form = form.copy(title = it); fieldHints = fieldHints - "title" }
+                            }
+                            FormSection("Company & contact", Icons.Default.Business) {
+                                PaperField("Company", form.company, Icons.Default.Apartment, hint = fieldHints["company"], caps = KeyboardCapitalization.Words) { form = form.copy(company = it); fieldHints = fieldHints - "company" }
+                                PaperField("Phone", form.phone, Icons.Default.Phone, hint = fieldHints["phone"], keyboard = KeyboardType.Phone) { form = form.copy(phone = it); fieldHints = fieldHints - "phone" }
+                                PaperField("E-mail", form.email, Icons.Default.Email, hint = fieldHints["email"], keyboard = KeyboardType.Email) { form = form.copy(email = it); fieldHints = fieldHints - "email" }
+                            }
+                            FormSection("Location", Icons.Default.Place) {
+                                PaperField("Address", form.address, Icons.Default.Home, singleLine = false, hint = fieldHints["address"], caps = KeyboardCapitalization.Words) { form = form.copy(address = it); fieldHints = fieldHints - "address" }
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    PaperField("State", form.state, null, Modifier.weight(1f), hint = fieldHints["state"], caps = KeyboardCapitalization.Words) { form = form.copy(state = it); fieldHints = fieldHints - "state" }
+                                    PaperField("Country", form.country, null, Modifier.weight(1f), caps = KeyboardCapitalization.Words, last = true) { form = form.copy(country = it) }
                                 }
                             }
                             NavRow(
-                                { SecondaryButton("Back") { screen = detailsBack } },
-                                { PrimaryButton("Continue") { screen = Screen.Customer } })
+                                { SecondaryButton("Back", icon = Icons.AutoMirrored.Filled.ArrowBack) { screen = detailsBack } },
+                                { PrimaryButton("Continue", trailingIcon = Icons.AutoMirrored.Filled.ArrowForward) { screen = Screen.Customer } })
                         }
-
                         Screen.Customer -> Scrolling {
                             Text("Customer profile", fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
                             Text("CUSTOMER TYPE", fontSize = 12.sp, color = Steel, letterSpacing = 1.sp)
@@ -550,14 +610,15 @@ fun App() {
 
                         Screen.Done -> Centered {
                             val first = form.name.split(" ").firstOrNull().orEmpty()
+                            SuccessCheck(Amber, OnAmber, 92.dp)
                             Text(if (first.isNotBlank()) "Welcome, $first!" else "Welcome!",
-                                fontSize = 40.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
-                            if (form.company.isNotBlank()) Text(form.company, color = Amber, fontSize = 18.sp)
+                                style = MaterialTheme.typography.displaySmall, color = LineC, textAlign = TextAlign.Center)
+                            if (form.company.isNotBlank()) Text(form.company, color = AmberText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                             val place = listOf(form.state, form.country).filter { it.isNotBlank() }.joinToString(", ")
                             if (place.isNotBlank()) Text(place, color = LineDim, fontSize = 14.sp)
                             val summary = listOfNotNull(form.customerType, form.marketExposure) + form.products.groupBy { it.substringBefore(" > ") }
                                 .map { (p, l) -> if (l.any { " > " in it }) "$p (${l.size})" else p }
-                            Text(summary.joinToString("  •  "), color = Amber, textAlign = TextAlign.Center)
+                            Text(summary.joinToString("  •  "), color = AmberText, textAlign = TextAlign.Center)
                             Text("Visit logged " + SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()).format(Date(loggedAt)) +
                                 (employee?.let { " · attended by ${it.name}" } ?: ""), color = Steel, fontSize = 13.sp, textAlign = TextAlign.Center)
                             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -567,8 +628,8 @@ fun App() {
                                     minLines = 3, maxLines = 6, modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
                                 Text("Have a handwritten enquiry? Attach a photo of it.", color = Steel, fontSize = 13.sp)
                                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    SecondaryButton("Take photo") { openNoteCamera() }
-                                    SecondaryButton("Upload image") { openNoteUpload() }
+                                    SecondaryButton("Take photo", Modifier.weight(1f), icon = Icons.Default.PhotoCamera) { openNoteCamera() }
+                                    SecondaryButton("Upload", Modifier.weight(1f), icon = Icons.Default.Image) { openNoteUpload() }
                                 }
                                 if (notePhotos.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -592,9 +653,10 @@ fun App() {
                             }
                             Text("Thanks for stopping by. Someone from our team will follow up. Tap \"Log next visitor now\" when you're done.",
                                 color = Steel, textAlign = TextAlign.Center)
-                            SecondaryButton("Log next visitor now") { reset() }
+                            PrimaryButton("Log next visitor", icon = Icons.Default.PersonAdd) { reset() }
                         }
                     }
+                  }   // AnimatedContent(screen)
                 }
             }
           } }   // when (page) / AnimatedContent
@@ -610,12 +672,22 @@ fun App() {
                 text = { Text("The visit in progress hasn't been saved. Start a new visit anyway?") },
                 confirmButton = { TextButton({ confirmDiscard = false; reset(); section = AppPage.Visit }) { Text("Discard", color = Danger) } },
                 dismissButton = { TextButton({ confirmDiscard = false }) { Text("Keep editing") } })
+            mailSuccess?.let { msg ->
+                AlertDialog(onDismissRequest = { mailSuccess = null },
+                    icon = { Icon(Icons.Default.CheckCircle, null, tint = Amber, modifier = Modifier.size(40.dp)) },
+                    title = { Text("Mail settings saved", textAlign = TextAlign.Center) },
+                    text = { Text(msg, textAlign = TextAlign.Center) },
+                    confirmButton = { TextButton({ mailSuccess = null }) { Text("OK", color = AmberText, fontWeight = FontWeight.Bold) } })
+            }
+            AppSnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(16.dp))
         }
       }
     }
+    }   // VisitorTheme
 }
 
-val Color_F0C3B8 =androidx.compose.ui.graphics.Color(0xFFF0C3B8)
+val Color_F0C3B8: androidx.compose.ui.graphics.Color
+    @Composable @ReadOnlyComposable get() = LocalAppColors.current.dangerText
 
 @Composable
 fun Centered(content: @Composable ColumnScope.() -> Unit) =
@@ -634,14 +706,49 @@ fun NavRow(left: @Composable () -> Unit, right: @Composable () -> Unit) =
         verticalAlignment = Alignment.CenterVertically) { left(); right() }
 
 @Composable
-fun PaperField(label: String, value: String, singleLine: Boolean = true, hint: String? = null, onChange: (String) -> Unit) =
-    OutlinedTextField(value, onChange, label = { Text(label) }, singleLine = singleLine,
-        minLines = if (singleLine) 1 else 2, modifier = Modifier.fillMaxWidth(),
+fun PaperField(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector?, modifier: Modifier = Modifier.fillMaxWidth(),
+               singleLine: Boolean = true, hint: String? = null, keyboard: KeyboardType = KeyboardType.Text,
+               caps: KeyboardCapitalization = KeyboardCapitalization.None, last: Boolean = false, onChange: (String) -> Unit) =
+    OutlinedTextField(value, onChange, modifier, label = { Text(label) }, singleLine = singleLine, shape = RoundedCornerShape(14.dp),
+        minLines = if (singleLine) 1 else 2,
+        leadingIcon = icon?.let { { Icon(it, null, Modifier.size(20.dp)) } },
+        keyboardOptions = KeyboardOptions(capitalization = caps, keyboardType = keyboard,
+            imeAction = if (last) ImeAction.Done else ImeAction.Next),
         // A hint means the card reader was unsure: amber border plus a short note until the visitor edits the field.
-        supportingText = hint?.let { { Text(it, color = PaperHint) } },
+        supportingText = hint?.let { { Text(it, color = AmberText) } },
         colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = PaperInk, unfocusedTextColor = PaperInk,
-            focusedBorderColor = Amber, unfocusedBorderColor = if (hint != null) Amber else PaperLine,
-            focusedLabelColor = PaperInk.copy(alpha = 0.7f), unfocusedLabelColor = PaperInk.copy(alpha = 0.6f),
-            cursorColor = Amber))
+            focusedTextColor = LineC, unfocusedTextColor = LineC, cursorColor = Amber,
+            focusedContainerColor = if (IsDark) NavyDeep.copy(alpha = 0.35f) else Navy,
+            unfocusedContainerColor = if (IsDark) NavyDeep.copy(alpha = 0.25f) else Navy,
+            focusedBorderColor = Amber, unfocusedBorderColor = if (hint != null) Amber else if (IsDark) LineC.copy(alpha = 0.16f) else Outline,
+            focusedLabelColor = AmberText, unfocusedLabelColor = Steel,
+            focusedLeadingIconColor = AmberText, unfocusedLeadingIconColor = Steel))
+
+/** Titled card grouping related form fields (Details screen). */
+@Composable
+fun FormSection(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, content: @Composable ColumnScope.() -> Unit) =
+    Column(Modifier.fillMaxWidth().cardBorder().clip(CardShape)
+        .background(if (IsDark) androidx.compose.ui.graphics.Color(0xFF244D70) else Panel).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(30.dp).clip(RoundedCornerShape(9.dp)).background(Amber.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
+                Icon(icon, null, tint = AmberText, modifier = Modifier.size(17.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Text(title.uppercase(), fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, color = LineDim)
+        }
+        content()
+    }
+
+/** Tinted banner with an icon, e.g. "Fields outlined in amber need a quick check". */
+@Composable
+fun Notice(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, color: androidx.compose.ui.graphics.Color,
+           textColor: androidx.compose.ui.graphics.Color) =
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(color.copy(alpha = 0.14f))
+        .border(1.dp, color.copy(alpha = 0.45f), RoundedCornerShape(12.dp)).padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = textColor, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Text(text, fontSize = 13.sp, color = textColor, fontWeight = FontWeight.Medium)
+    }
 

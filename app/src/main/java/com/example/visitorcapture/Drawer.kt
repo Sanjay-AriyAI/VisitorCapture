@@ -37,7 +37,7 @@ fun AppDrawer(
                         Text(employee?.name ?: "Not signed in", fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
                             color = LineC, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         val sub = listOfNotNull(employee?.title?.takeIf { it.isNotBlank() }).joinToString()
-                        if (sub.isNotBlank()) Text(sub, fontSize = 13.sp, color = Amber, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        if (sub.isNotBlank()) Text(sub, fontSize = 13.sp, color = AmberText, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
                 Text("Device · $deviceName", fontSize = 12.sp, color = Steel, modifier = Modifier.padding(top = 10.dp),

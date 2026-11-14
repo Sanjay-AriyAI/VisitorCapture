@@ -19,6 +19,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -143,14 +145,14 @@ fun LoginScreen(current: EmployeeInfo?, onLogin: (EmployeeInfo) -> Unit, onCance
     var manual by remember { mutableStateOf(false) }
 
     Centered {
-        Text("Staff login", fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
+        Text("Staff login", style = MaterialTheme.typography.headlineMedium, color = LineC)
         Text(
             if (current == null) "Scan your vCard QR code to start. Your name is saved with every visitor you attend."
             else "Signed in as ${current.name}. Scan another staff QR code to switch user.",
             color = Steel, textAlign = TextAlign.Center)
         Box(
-            Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(10.dp))
-                .background(Panel).border(2.dp, LineDim, RoundedCornerShape(10.dp)),
+            Modifier.fillMaxWidth().aspectRatio(1f).clip(CardShape).background(NavyDeep)
+                .scanSweep(Amber, active = hasCam).viewfinder(Amber, arm = 40.dp, inset = 16.dp),
             contentAlignment = Alignment.Center
         ) {
             if (hasCam) QrScanner(Modifier.fillMaxSize()) { raw ->
@@ -180,20 +182,15 @@ private fun ManualLoginDialog(onDismiss: () -> Unit, onLogin: (EmployeeInfo) -> 
     var name by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Enter your details") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(name, { name = it }, label = { Text("Full name") }, singleLine = true)
-                OutlinedTextField(email, { email = it }, label = { Text("Email (identifies you across phones)") }, singleLine = true)
-                OutlinedTextField(phone, { phone = it }, label = { Text("Phone") }, singleLine = true)
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = name.isNotBlank(), onClick = {
-                onLogin(EmployeeInfo(name = name.trim(), email = email.trim(), phone = phone.trim(), raw = "manual entry"))
-            }) { Text("Sign in") }
-        },
-        dismissButton = { TextButton(onDismiss) { Text("Cancel") } })
+    @Composable fun field(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector, set: (String) -> Unit) =
+        OutlinedTextField(value, set, label = { Text(label) }, singleLine = true, leadingIcon = { Icon(icon, null) },
+            modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), colors = darkFieldColors(filled = false))
+    FormSheet("Enter your details", onDismiss, icon = Icons.Default.Badge,
+        saveLabel = "Sign in", saveEnabled = name.isNotBlank(), onSave = {
+            onLogin(EmployeeInfo(name = name.trim(), email = email.trim(), phone = phone.trim(), raw = "manual entry"))
+        }) {
+        field("Full name", name, Icons.Default.Person) { name = it }
+        field("E-mail (identifies you across phones)", email, Icons.Default.Email) { email = it }
+        field("Phone", phone, Icons.Default.Phone) { phone = it }
+    }
 }
