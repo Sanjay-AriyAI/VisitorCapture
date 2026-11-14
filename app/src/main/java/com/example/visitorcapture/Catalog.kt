@@ -10,8 +10,8 @@ object Catalog {
     private fun m(n: String, vararg s: Section) = Machine(n, s.toList())
 
     private val G = arrayOf("LMW", "Rieter", "Trutzschler", "Others")
-    private val SIMPLEX = arrayOf("Marzoli", "Toyota", "LMW", "Electro-Jet", "Rieter", "Zinser", "Others")
-    private val SPIN = arrayOf("LMW", "Rieter", "Zinser", "Marzoli", "KTTM", "Sussen", "Others")
+    private val SIMPLEX = arrayOf("Marzoli", "Toyoda", "LMW", "Electro-Jet", "Rieter", "Zinser", "Others")
+    private val SPIN = arrayOf("LMW", "Rieter", "Zinser", "Marzoli", "KTTM / Toyoda", "Sussen", "Others")
     private val OHTC = arrayOf("ELGI", "SIMTA", "LUWA", "Electrojet", "Unirolls", "Mohler")
     private val HUMID = arrayOf("LUWA", "Batliboi", "Temsons", "Others")
 
@@ -20,7 +20,7 @@ object Catalog {
         m("Blow Room", brands(*G)),
         m("Carding", brands(*G)),
         m("Draw Frame", brands(*G)),
-        m("Comber", brands("Toyota", "LMW", "Rieter", "Others")),
+        m("Comber", brands("Toyoda", "LMW", "Rieter", "Others")),
         m("Lap Former", brands("LMW", "Rieter", "Others")),
         m("Simplex / Roving Frame / Speed Frame", brands(*SIMPLEX)),
         m("Spinning", brands(*SPIN)),
@@ -29,14 +29,14 @@ object Catalog {
             sec("Savio", "Espero", "Orion", "Polar", "Eco Pulsar"),
             sec("Murata", "21C", "Qpro/Qpro+", "QproEX", "AI Cone"),
             sec("Others", "Others")),
-        m("TFO", brands("Murata", "Savio", "Zinser", "Veejay", "Others")),
+        m("TFO", brands("Murata", "Savio", "Veejay", "Others")),
         m("SSM Winding", brands("Xeno", "XENO-YW", "XENO1", "XENO2")),
         m("Open-End", brands("Rieter", "Saurer", "Others")),
         m("OHTC", brands(*OHTC)),
         m("YCP", brands("ELGI", "Mohler", "Sieger", "Xorella")),
         m("Humidification Plant", brands(*HUMID)),
         m("Murata Air-Jet / Vortex Spinning",
-            sec("Murata Air-Jet", "860", "870", "870 Ex"),
+            sec("Murata Air-Jet", "860", "861", "870", "870 Ex"),
             sec("Rieter Air-Jet", "Rieter Air-Jet"))
     )
 
