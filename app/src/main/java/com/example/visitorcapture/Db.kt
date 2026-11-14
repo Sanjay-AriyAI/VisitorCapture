@@ -75,6 +75,10 @@ interface VisitorDao {
     suspend fun markThankYou(uid: String, status: String, at: Long)
     @Query("SELECT * FROM visitors ORDER BY createdAt DESC") fun all(): Flow<List<Visitor>>
     @Query("SELECT COUNT(*) FROM visitors WHERE uid LIKE :prefix || '%'") suspend fun countUidPrefix(prefix: String): Int
+    /** Profile edited: visits this staff member attended on this phone follow the corrected details. */
+    @Query("UPDATE visitors SET attendedByKey = :newKey, attendedByName = :name, attendedByTitle = :title, " +
+        "attendedByEmail = :email, attendedByPhone = :phone WHERE attendedByKey = :oldKey")
+    suspend fun renameStaff(oldKey: String, newKey: String, name: String, title: String, email: String, phone: String): Int
 }
 
 /** Readable UID: STAFF3-dd-HHmm-NNNN, e.g. SIV-13-0922-0001(also the photo file name in exports). */
@@ -99,6 +103,11 @@ abstract class EmployeeDao {
                                email: String, phone: String, vcard: String, at: Long)
 
     @Query("SELECT * FROM employees ORDER BY lastLoginAt DESC") abstract fun all(): Flow<List<Employee>>
+
+    @Query("UPDATE employees SET empKey = :newKey, name = :name, title = :title, company = :company, " +
+        "email = :email, phone = :phone WHERE empKey = :oldKey")
+    abstract suspend fun edit(oldKey: String, newKey: String, name: String, title: String, company: String,
+                              email: String, phone: String): Int
 
     /** First login adds the person; later logins refresh their details and last-login time. */
     @Transaction

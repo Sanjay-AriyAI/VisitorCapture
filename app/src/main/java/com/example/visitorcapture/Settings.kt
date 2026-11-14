@@ -3,6 +3,8 @@ package com.example.visitorcapture
 import android.content.SharedPreferences
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -119,8 +121,12 @@ fun SettingsScreen(
 // ---------------------------------------------------------------- Profile
 
 @Composable
-fun ProfileScreen(employee: EmployeeInfo?, visitors: List<Visitor>, onSwitchUser: () -> Unit, onBack: () -> Unit) =
-    SectionPage("Profile", onBack) {
+fun ProfileScreen(employee: EmployeeInfo?, visitors: List<Visitor>, onSwitchUser: () -> Unit,
+                  onEdit: (EmployeeInfo) -> Unit, onBack: () -> Unit) {
+    var editing by remember { mutableStateOf(false) }
+    SectionPage("Profile", onBack, actions = {
+        if (employee != null) IconButton({ editing = true }) { Icon(Icons.Default.Edit, "Edit profile", tint = LineC) }
+    }) {
         if (employee == null) {
             Column(Modifier.fillMaxWidth().padding(top = 60.dp), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -163,8 +169,51 @@ fun ProfileScreen(employee: EmployeeInfo?, visitors: List<Visitor>, onSwitchUser
                 SettingRow(Icons.Default.History, fmt.format(Date(record.lastLoginAt)), "Last signed in")
             }
         }
-        SecondaryButton("Switch user", Modifier.fillMaxWidth().padding(top = 24.dp)) { onSwitchUser() }
+        Row(Modifier.fillMaxWidth().padding(top = 24.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            SecondaryButton("Edit profile", Modifier.weight(1f)) { editing = true }
+            SecondaryButton("Switch user", Modifier.weight(1f)) { onSwitchUser() }
+        }
     }
+    if (editing && employee != null) EditProfileDialog(employee, onDismiss = { editing = false },
+        onSave = { onEdit(it); editing = false })
+}
+
+/** Correct the signed-in staff member's details (name, title, company, e-mail, phone). */
+@Composable
+fun EditProfileDialog(e: EmployeeInfo, onDismiss: () -> Unit, onSave: (EmployeeInfo) -> Unit) {
+    var name by remember { mutableStateOf(e.name) }
+    var title by remember { mutableStateOf(e.title) }
+    var company by remember { mutableStateOf(e.company) }
+    var email by remember { mutableStateOf(e.email) }
+    var phone by remember { mutableStateOf(e.phone) }
+    val emailOk = email.isBlank() || ThankYou.isValidEmail(email)
+    val canSave = name.isNotBlank() && emailOk
+    @Composable fun field(label: String, value: String, icon: ImageVector, error: String? = null, set: (String) -> Unit) =
+        OutlinedTextField(value, set, label = { Text(label) }, singleLine = true, leadingIcon = { Icon(icon, null) },
+            isError = error != null, supportingText = error?.let { { Text(it) } }, modifier = Modifier.fillMaxWidth())
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.Edit, null) },
+        title = { Text("Edit profile") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                field("Name", name, Icons.Default.Person, if (name.isBlank()) "Name is required" else null) { name = it }
+                field("Job title", title, Icons.Default.Badge) { title = it }
+                field("Company", company, Icons.Default.Business) { company = it }
+                field("E-mail", email, Icons.Default.Email, if (!emailOk) "Enter a full e-mail like name@company.com" else null) { email = it }
+                field("Phone", phone, Icons.Default.Phone) { phone = it }
+                Text("Visits you attended on this phone are updated too.", fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = canSave, onClick = {
+                onSave(e.copy(name = name.trim(), title = title.trim(), company = company.trim(),
+                    email = email.trim(), phone = phone.trim()))
+            }) { Text("Save") }
+        },
+        dismissButton = { TextButton(onDismiss) { Text("Cancel") } })
+}
 
 @Composable
 fun StatTile(label: String, value: Int, modifier: Modifier = Modifier, color: androidx.compose.ui.graphics.Color = LineC) =

@@ -285,6 +285,24 @@ fun App() {
         if (screen == Screen.Login) screen = Screen.Welcome
     }
 
+    /** Profile edited: remember it on this phone, then update the staff record and the visits they attended here. */
+    fun editProfile(updated: EmployeeInfo) {
+        val old = employee ?: return
+        saveEmployee(prefs, updated)
+        employee = updated
+        scope.launch {
+            try {
+                db.employeeDao().edit(old.key, updated.key, updated.name, updated.title, updated.company, updated.email, updated.phone)
+            } catch (e: android.database.sqlite.SQLiteConstraintException) {
+                // the new e-mail already belongs to another saved staff record: refresh that one instead
+                db.employeeDao().touch(updated.key, updated.name, updated.title, updated.company, updated.email,
+                    updated.phone, updated.raw, System.currentTimeMillis())
+            }
+            db.dao().renameStaff(old.key, updated.key, updated.name, updated.title, updated.email, updated.phone)
+        }
+        android.widget.Toast.makeText(ctx, "Profile updated", android.widget.Toast.LENGTH_SHORT).show()
+    }
+
     fun exportData() {
         scope.launch {
             val f = withContext(Dispatchers.IO) { Sync.exportZip(ctx, visitors, deviceName) }
@@ -357,7 +375,8 @@ fun App() {
               val dir = if (targetState.ordinal >= initialState.ordinal) 1 else -1
               (fadeIn(tween(220)) + slideInHorizontally(tween(260)) { dir * it / 8 }) togetherWith fadeOut(tween(140))
           }) { page -> when (page) {
-            AppPage.Profile -> ProfileScreen(employee, visitors, onSwitchUser = { switchUser() }, onBack = { section = AppPage.Visit })
+            AppPage.Profile -> ProfileScreen(employee, visitors, onSwitchUser = { switchUser() },
+                onEdit = { updated -> editProfile(updated) }, onBack = { section = AppPage.Visit })
             AppPage.Logs -> VisitorLogScreen(visitors, onBack = { section = AppPage.Visit },
                 onExport = { exportData() }, onImport = { importPicker.launch(arrayOf("*/*")) },
                 onEdit = { v -> scope.launch { db.dao().update(v) } },
