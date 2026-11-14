@@ -121,6 +121,7 @@ fun App() {
     var ocrError by remember { mutableStateOf(false) }
     // Per-field "please check" notes from the card reader; a note disappears as soon as the visitor edits that field.
     var fieldHints by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var nameError by remember { mutableStateOf(false) }                       // Continue tapped with no name: show the error
     // What the scanner actually read, shown only in debug builds so a wrong field can be traced to its cause.
     var ocrRaw by remember { mutableStateOf("") }
     var showRaw by remember { mutableStateOf(false) }
@@ -153,7 +154,7 @@ fun App() {
         persistExtra()
         lastUid = null; extraNote = ""; extraSaved = ""
         notePhotos = emptyList(); pendingNote = null; noteBusy = false; noteError = null
-        form = Form(); photoFile = null; photoTaken = false; ocrError = false; fieldHints = emptyMap(); visitStart = 0L; screen = Screen.Welcome
+        form = Form(); photoFile = null; photoTaken = false; ocrError = false; fieldHints = emptyMap(); nameError = false; visitStart = 0L; screen = Screen.Welcome
     }
 
     fun runOcr(file: File) {
@@ -538,7 +539,8 @@ fun App() {
                             if (fieldHints.isNotEmpty()) Notice(Icons.Default.Info, "Fields outlined in amber need a quick check against the card.", Amber, AmberText)
 
                             FormSection("Person", Icons.Default.Person) {
-                                PaperField("Full name", form.name, Icons.Default.Badge, hint = fieldHints["name"], caps = KeyboardCapitalization.Words) { form = form.copy(name = it); fieldHints = fieldHints - "name" }
+                                PaperField("Full name *", form.name, Icons.Default.Badge, hint = fieldHints["name"], caps = KeyboardCapitalization.Words,
+                                    error = if (nameError && form.name.isBlank()) "Name is required" else null) { form = form.copy(name = it); fieldHints = fieldHints - "name" }
                                 PaperField("Job title", form.title, Icons.Default.Work, hint = fieldHints["title"], caps = KeyboardCapitalization.Words) { form = form.copy(title = it); fieldHints = fieldHints - "title" }
                             }
                             FormSection("Company & contact", Icons.Default.Business) {
@@ -555,7 +557,11 @@ fun App() {
                             }
                             NavRow(
                                 { SecondaryButton("Back", icon = Icons.AutoMirrored.Filled.ArrowBack) { screen = detailsBack } },
-                                { PrimaryButton("Continue", trailingIcon = Icons.AutoMirrored.Filled.ArrowForward) { screen = Screen.Customer } })
+                                { PrimaryButton("Continue", trailingIcon = Icons.AutoMirrored.Filled.ArrowForward) {
+                                    // the visitor's name is mandatory
+                                    if (form.name.isBlank()) { nameError = true; scope.launch { snackbar.showSnackbar("Enter the visitor's full name to continue") } }
+                                    else { nameError = false; screen = Screen.Customer }
+                                } })
                         }
                         Screen.Customer -> Scrolling {
                             Text("Customer profile", fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
@@ -708,21 +714,25 @@ fun NavRow(left: @Composable () -> Unit, right: @Composable () -> Unit) =
 @Composable
 fun PaperField(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector?, modifier: Modifier = Modifier.fillMaxWidth(),
                singleLine: Boolean = true, hint: String? = null, keyboard: KeyboardType = KeyboardType.Text,
-               caps: KeyboardCapitalization = KeyboardCapitalization.None, last: Boolean = false, onChange: (String) -> Unit) =
+               caps: KeyboardCapitalization = KeyboardCapitalization.None, last: Boolean = false, error: String? = null,
+               onChange: (String) -> Unit) =
     OutlinedTextField(value, onChange, modifier, label = { Text(label) }, singleLine = singleLine, shape = RoundedCornerShape(14.dp),
         minLines = if (singleLine) 1 else 2,
         leadingIcon = icon?.let { { Icon(it, null, Modifier.size(20.dp)) } },
         keyboardOptions = KeyboardOptions(capitalization = caps, keyboardType = keyboard,
             imeAction = if (last) ImeAction.Done else ImeAction.Next),
         // A hint means the card reader was unsure: amber border plus a short note until the visitor edits the field.
-        supportingText = hint?.let { { Text(it, color = AmberText) } },
+        isError = error != null,
+        supportingText = (error ?: hint)?.let { msg -> { Text(msg, color = if (error != null) Color_F0C3B8 else AmberText) } },
         colors = OutlinedTextFieldDefaults.colors(
             focusedTextColor = LineC, unfocusedTextColor = LineC, cursorColor = Amber,
             focusedContainerColor = if (IsDark) NavyDeep.copy(alpha = 0.35f) else Navy,
             unfocusedContainerColor = if (IsDark) NavyDeep.copy(alpha = 0.25f) else Navy,
             focusedBorderColor = Amber, unfocusedBorderColor = if (hint != null) Amber else if (IsDark) LineC.copy(alpha = 0.16f) else Outline,
             focusedLabelColor = AmberText, unfocusedLabelColor = Steel,
-            focusedLeadingIconColor = AmberText, unfocusedLeadingIconColor = Steel))
+            focusedLeadingIconColor = AmberText, unfocusedLeadingIconColor = Steel,
+            errorContainerColor = if (IsDark) NavyDeep.copy(alpha = 0.25f) else Navy, errorTextColor = LineC,
+            errorBorderColor = Danger, errorLabelColor = Color_F0C3B8, errorLeadingIconColor = Color_F0C3B8, errorCursorColor = Amber))
 
 /** Titled card grouping related form fields (Details screen). */
 @Composable
