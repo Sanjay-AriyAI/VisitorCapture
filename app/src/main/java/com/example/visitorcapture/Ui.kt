@@ -8,7 +8,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -22,6 +26,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -61,9 +66,12 @@ fun LinkButton(text: String, onClick: () -> Unit) =
 
 /** Top progress rail: Scan - Details - Customer - Products - Outcome - Done. A negative [step] hides the track (login screen). */
 @Composable
-fun ProgressRail(step: Int, labels: List<String>, attendedBy: String?, trailing: @Composable () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp)) {
+fun ProgressRail(step: Int, labels: List<String>, attendedBy: String?,
+                 leading: @Composable () -> Unit = {}, trailing: @Composable () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(start = 8.dp, end = 12.dp, top = 12.dp, bottom = 12.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            leading()
+            Spacer(Modifier.width(4.dp))
             NarenLogo(Modifier.height(34.dp), compact = true)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
@@ -76,7 +84,7 @@ fun ProgressRail(step: Int, labels: List<String>, attendedBy: String?, trailing:
         if (step >= 0) Column {
         Spacer(Modifier.height(6.dp))
         val last = (labels.size - 1).coerceAtLeast(1)
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
+        BoxWithConstraints(Modifier.fillMaxWidth().padding(start = 12.dp)) {
             // Columns shrink below 64 dp so all steps still fit on a narrow phone.
             val colW = minOf(64.dp, maxWidth / labels.size.coerceAtLeast(1))
             Box(Modifier.padding(start = colW / 2, end = colW / 2, top = 10.dp)) {
@@ -168,7 +176,90 @@ fun darkFieldColors() = OutlinedTextFieldDefaults.colors(
     focusedTextColor = LineC, unfocusedTextColor = LineC, cursorColor = Amber,
     focusedBorderColor = Amber, unfocusedBorderColor = LineC.copy(alpha = 0.25f),
     focusedContainerColor = Panel, unfocusedContainerColor = Panel,
-    focusedPlaceholderColor = Steel, unfocusedPlaceholderColor = Steel)
+    focusedPlaceholderColor = Steel, unfocusedPlaceholderColor = Steel,
+    focusedLabelColor = Amber, unfocusedLabelColor = Steel,
+    focusedSupportingTextColor = Steel, unfocusedSupportingTextColor = Steel,
+    focusedLeadingIconColor = LineDim, unfocusedLeadingIconColor = Steel,
+    focusedTrailingIconColor = LineDim, unfocusedTrailingIconColor = Steel)
+
+// ---- building blocks for the pages opened from the side menu and the gear ----
+
+/** Slim top bar with a back arrow, used by every page outside the visit flow. */
+@Composable
+fun SectionTopBar(title: String, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit = {}) =
+    Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 8.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = LineC) }
+        Text(title, fontSize = 22.sp, fontWeight = FontWeight.Bold, fontFamily = Display, color = LineC,
+            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(start = 4.dp))
+        actions()
+    }
+
+/** Scrollable page body under a [SectionTopBar]. */
+@Composable
+fun SectionPage(title: String, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit = {},
+                content: @Composable ColumnScope.() -> Unit) =
+    Column(Modifier.fillMaxSize()) {
+        SectionTopBar(title, onBack, actions)
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(start = 16.dp, end = 16.dp, bottom = 32.dp), content = content)
+    }
+
+/** Small caps label above a group of settings. */
+@Composable
+fun SectionHeader(text: String) =
+    Text(text.uppercase(), fontSize = 12.sp, color = Steel, letterSpacing = 1.sp, fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(start = 4.dp, top = 22.dp, bottom = 8.dp))
+
+/** Rounded card that holds a list of setting rows. */
+@Composable
+fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) =
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Panel), content = content)
+
+@Composable
+fun GroupDivider() = HorizontalDivider(Modifier.padding(start = 54.dp), color = LineC.copy(alpha = 0.08f))
+
+@Composable
+fun SettingRow(icon: ImageVector, title: String, subtitle: String? = null, onClick: (() -> Unit)? = null,
+               trailing: @Composable () -> Unit = {}) =
+    Row(Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+        .padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = LineDim, modifier = Modifier.size(22.dp))
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 16.sp, color = LineC)
+            subtitle?.let { Text(it, fontSize = 13.sp, color = Steel) }
+        }
+        trailing()
+    }
+
+@Composable
+fun Chevron() = Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = Steel)
+
+@Composable
+fun SettingSwitch(icon: ImageVector, title: String, subtitle: String?, checked: Boolean, onChange: (Boolean) -> Unit) =
+    SettingRow(icon, title, subtitle, onClick = { onChange(!checked) }) {
+        Switch(checked, onChange, colors = SwitchDefaults.colors(
+            checkedThumbColor = NavyDeep, checkedTrackColor = Amber, checkedBorderColor = Amber,
+            uncheckedThumbColor = LineDim, uncheckedTrackColor = NavyDeep, uncheckedBorderColor = LineDim.copy(alpha = 0.5f)))
+    }
+
+fun initials(name: String) =
+    name.split(" ").filter { it.isNotBlank() }.take(2).joinToString("") { it.first().uppercase() }.ifEmpty { "?" }
+
+/** Round badge with the person's initials. */
+@Composable
+fun Avatar(name: String, size: Dp = 44.dp, container: Color = Amber, content: Color = NavyDeep) =
+    Box(Modifier.size(size).clip(CircleShape).background(container), contentAlignment = Alignment.Center) {
+        Text(initials(name), color = content, fontWeight = FontWeight.Bold, fontSize = (size.value * 0.38f).sp)
+    }
+
+/** Small rounded label, e.g. "OEM" or "Mail sent" on a visitor card. */
+@Composable
+fun Pill(text: String, color: Color = Amber, textColor: Color = color) =
+    Text(text, fontSize = 11.sp, color = textColor, fontWeight = FontWeight.Medium,
+        modifier = Modifier.clip(RoundedCornerShape(50)).background(color.copy(alpha = 0.16f))
+            .padding(horizontal = 9.dp, vertical = 3.dp))
 
 /** The logo artwork is dark on transparent/white, so it always sits on a white plate. */
 @Composable

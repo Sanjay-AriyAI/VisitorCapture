@@ -11,6 +11,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
@@ -94,8 +96,10 @@ fun App() {
     var screen by remember { mutableStateOf(if (employee == null) Screen.Login else Screen.Welcome) }
     var visitStart by remember { mutableLongStateOf(0L) }                     // date/time the current visit began
     var loggedAt by remember { mutableLongStateOf(0L) }                       // visit time shown on the Done screen
-    var showAdmin by remember { mutableStateOf(false) }
-    var showMail by remember { mutableStateOf(false) }                        // Mail settings dialog on the home screen
+    var section by remember { mutableStateOf(AppPage.Visit) }                 // page picked from the side menu / gear
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    var appSettings by remember { mutableStateOf(AppSettings.load(prefs)) }
+    var confirmDiscard by remember { mutableStateOf(false) }
     var catalogProduct by remember { mutableStateOf("Mechanical Spares") }
     var form by remember { mutableStateOf(Form()) }
     var photoFile by remember { mutableStateOf<File?>(null) }
@@ -145,7 +149,7 @@ fun App() {
             if (p == null) { ocrError = true; fieldHints = emptyMap() }
             else {
                 form = form.copy(name = p.name, title = p.title, company = p.company, phone = p.phone, email = p.email,
-                    address = p.address, state = p.state, country = p.country)
+                    address = p.address, state = p.state, country = p.country.ifBlank { appSettings.defaultCountry.trim() })
                 fieldHints = p.flags; ocrError = false; ocrRaw = p.raw
             }
             screen = Screen.Details
@@ -259,11 +263,14 @@ fun App() {
             followUpAt = if (follow != null && follow != "Remarks") form.followUpAt else 0L,
             followUpNote = if (follow == "Remarks") form.followUpNote.trim() else "",
             thankYouStatus = ThankYou.initialStatus(form.email))
+        // "Send automatically" (Settings) queues the mail straight away; otherwise it waits (PENDING) for the Mail settings button.
+        val autoSend = appSettings.autoThankYou && v.thankYouStatus == ThankYou.PENDING && SmtpSettings.load(ctx).complete
         extraNote = ""; extraSaved = ""
-        scope.launch {   // the thank-you mail waits (PENDING) until staff press "Send thank-you mails"
+        scope.launch {
             val uid = UidGen.withSeq(uidPrefix, db.dao().countUidPrefix(uidPrefix))
             lastUid = uid
-            db.dao().insert(v.copy(uid = uid))
+            db.dao().insert(v.copy(uid = uid, thankYouStatus = if (autoSend) ThankYou.QUEUED else v.thankYouStatus))
+            if (autoSend) ThankYouWorker.enqueue(ctx)
         }
     }
 
@@ -292,12 +299,39 @@ fun App() {
     // Save the note shortly after the last keystroke (reset() also saves it, so nothing is lost).
     LaunchedEffect(extraNote) { delay(700); persistExtra() }
 
-    BackHandler(enabled = showAdmin || (screen != Screen.Welcome && !(screen == Screen.Login && employee == null))) {
-        if (showAdmin) showAdmin = false
+    // ---- side menu, settings and page switching ----
+    val menuAvailable = employee != null && screen != Screen.Login
+    val midVisit = screen !in setOf(Screen.Login, Screen.Welcome, Screen.Done)
+    val mailConfigured = remember(section, visitors) { SmtpSettings.load(ctx).complete }
+    fun go(s: AppPage) { section = s; scope.launch { drawerState.close() } }
+    fun startNewVisit() {
+        scope.launch { drawerState.close() }
+        if (midVisit && appSettings.confirmAbandon) confirmDiscard = true else { reset(); section = AppPage.Visit }
+    }
+    fun switchUser() { section = AppPage.Visit; screen = Screen.Login; scope.launch { drawerState.close() } }
+    fun startVisit(manual: Boolean) {
+        visitStart = System.currentTimeMillis()
+        if (form.country.isBlank()) form = form.copy(country = appSettings.defaultCountry.trim())
+        if (manual) { photoFile = null; photoTaken = false; ocrError = false; fieldHints = emptyMap(); screen = Screen.Details }
+        else screen = Screen.Capture
+    }
+    // Back from Details returns to the camera, unless the visit started with manual entry ("Skip card scan").
+    val detailsBack = if (appSettings.skipScan && !photoTaken) Screen.Welcome else Screen.Capture
+
+    val view = androidx.compose.ui.platform.LocalView.current
+    DisposableEffect(appSettings.keepAwake) {
+        view.keepScreenOn = appSettings.keepAwake
+        onDispose { view.keepScreenOn = false }
+    }
+
+    BackHandler(enabled = drawerState.isOpen || section != AppPage.Visit ||
+        (screen != Screen.Welcome && !(screen == Screen.Login && employee == null))) {
+        if (drawerState.isOpen) scope.launch { drawerState.close() }
+        else if (section != AppPage.Visit) section = AppPage.Visit
         else when (screen) {
             Screen.Login -> screen = Screen.Welcome
             Screen.Capture -> screen = Screen.Welcome
-            Screen.Details -> screen = Screen.Capture
+            Screen.Details -> screen = detailsBack
             Screen.Customer -> screen = Screen.Details
             Screen.Products -> screen = Screen.Customer
             Screen.Catalog -> screen = Screen.Products
@@ -308,10 +342,52 @@ fun App() {
     }
 
     CompositionLocalProvider(LocalContentColor provides LineC) {
+      ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = drawerState.isOpen,   // swipe closes it; an edge swipe never opens it by accident mid-visit
+        scrimColor = NavyDeep.copy(alpha = 0.6f),
+        drawerContent = {
+            AppDrawer(section, employee, deviceName, visitorCount = visitors.size,
+                mailPending = visitors.count { it.thankYouStatus == ThankYou.PENDING }, mailConfigured = mailConfigured,
+                visitInProgress = midVisit || screen == Screen.Done,
+                onSelect = { go(it) }, onNewVisit = { startNewVisit() }, onSwitchUser = { switchUser() })
+        }) {
         Box(Modifier.fillMaxSize().background(Navy).systemBarsPadding()) {
+          AnimatedContent(section, label = "section", transitionSpec = {
+              val dir = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+              (fadeIn(tween(220)) + slideInHorizontally(tween(260)) { dir * it / 8 }) togetherWith fadeOut(tween(140))
+          }) { page -> when (page) {
+            AppPage.Profile -> ProfileScreen(employee, visitors, onSwitchUser = { switchUser() }, onBack = { section = AppPage.Visit })
+            AppPage.Logs -> VisitorLogScreen(visitors, onBack = { section = AppPage.Visit },
+                onExport = { exportData() }, onImport = { importPicker.launch(arrayOf("*/*")) },
+                onEdit = { v -> scope.launch { db.dao().update(v) } },
+                onDelete = { v ->
+                    scope.launch {
+                        db.dao().delete(v)
+                        withContext(Dispatchers.IO) { v.cardPhotoPath?.let { File(it).delete() }; Sync.notePhotos(v).forEach { it.delete() } }
+                    }
+                },
+                onClear = { scope.launch { db.dao().clear(); File(ctx.filesDir, "cards").deleteRecursively() } },
+                onRetryThankYou = { v ->
+                    scope.launch {
+                        if (ThankYou.isValidEmail(v.email)) { db.dao().markThankYou(v.uid, ThankYou.QUEUED, 0); ThankYouWorker.enqueue(ctx) }
+                    }
+                })
+            AppPage.Mail -> MailSettingsScreen(visitors, onBack = { section = AppPage.Visit })
+            AppPage.Settings -> SettingsScreen(deviceName,
+                onDeviceName = { deviceName = it; prefs.edit().putString("device", it).apply() },
+                settings = appSettings, onChange = { appSettings = it; it.save(prefs) },
+                mailConfigured = mailConfigured, onOpen = { section = it }, onBack = { section = AppPage.Visit })
+            AppPage.About -> AboutScreen(deviceName, visitors.size, onBack = { section = AppPage.Visit })
+            AppPage.Visit ->
             Column(Modifier.fillMaxSize()) {
-                ProgressRail(screen.step, STEP_LABELS, employee?.name) {
-                    IconButton({ showAdmin = true }) { Icon(Icons.Default.Settings, "Staff view", tint = Steel) }
+                ProgressRail(screen.step, STEP_LABELS, employee?.name,
+                    leading = {
+                        if (menuAvailable) IconButton({ scope.launch { drawerState.open() } }) {
+                            Icon(Icons.Default.Menu, "Open menu", tint = LineC)
+                        }
+                    }) {
+                    if (menuAvailable) IconButton({ section = AppPage.Settings }) { Icon(Icons.Default.Settings, "Settings", tint = Steel) }
                 }
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when (screen) {
@@ -324,33 +400,21 @@ fun App() {
                                 fontFamily = Display, textAlign = TextAlign.Center, lineHeight = 46.sp)
                             Text("Scan your business card and we'll log your visit & interests in under a minute.",
                                 color = Steel, textAlign = TextAlign.Center)
-                            PrimaryButton("Scan business card") { visitStart = System.currentTimeMillis(); screen = Screen.Capture }
+                            if (appSettings.skipScan) {
+                                PrimaryButton("Enter visitor details") { startVisit(manual = true) }
+                                LinkButton("Scan a business card instead") { startVisit(manual = false) }
+                            } else PrimaryButton("Scan business card") { startVisit(manual = false) }
                             employee?.let { e ->
                                 Text("Attended by ${e.name}" + if (e.title.isNotBlank()) ", ${e.title}" else "",
                                     color = Amber, fontSize = 14.sp, textAlign = TextAlign.Center)
                                 LinkButton("Not you? Switch user") { screen = Screen.Login }
                             }
-                            // Thank-you mails: nothing is sent on its own; staff press the button and the mails go out once online.
+                            // Thank-you mails are sent from Mail settings (side menu); this is just a quiet reminder.
                             val unsent = visitors.count { it.thankYouStatus == ThankYou.PENDING }
-                            val queued = visitors.count { it.thankYouStatus == ThankYou.QUEUED }
                             val failed = visitors.count { it.thankYouStatus == ThankYou.FAILED }
-                            if (unsent > 0 || queued > 0 || failed > 0) {
-                                Text(listOf("$unsent to send", "$queued queued", "$failed failed").filterIndexed { i, _ -> intArrayOf(unsent, queued, failed)[i] > 0 }
-                                    .joinToString(" · ") + " (thank-you mails)", color = Steel, fontSize = 13.sp, textAlign = TextAlign.Center)
-                            }
-                            if (unsent > 0) SecondaryButton("Send thank-you mails ($unsent)") {
-                                if (!SmtpSettings.load(ctx).complete) {
-                                    android.widget.Toast.makeText(ctx, "Enter the mail settings first", android.widget.Toast.LENGTH_LONG).show()
-                                    showMail = true
-                                } else scope.launch {
-                                    val n = db.dao().queueAllThankYou()
-                                    ThankYouWorker.enqueue(ctx)
-                                    android.widget.Toast.makeText(ctx, "$n thank-you mail(s) queued. They send as soon as the phone is online.",
-                                        android.widget.Toast.LENGTH_LONG).show()
-                                }
-                            }
-                            LinkButton("Mail settings") { showMail = true }
-                            if (showMail) MailSettingsDialog(onDone = { showMail = false })
+                            if (unsent > 0 || failed > 0) LinkButton(listOfNotNull(
+                                if (unsent > 0) "$unsent thank-you mail(s) to send" else null,
+                                if (failed > 0) "$failed failed" else null).joinToString(" · ") + "  ›") { section = AppPage.Mail }
                         }
 
                         Screen.Capture -> Centered {
@@ -410,7 +474,7 @@ fun App() {
                                 }
                             }
                             NavRow(
-                                { SecondaryButton("Back") { screen = Screen.Capture } },
+                                { SecondaryButton("Back") { screen = detailsBack } },
                                 { PrimaryButton("Continue") { screen = Screen.Customer } })
                         }
 
@@ -514,92 +578,22 @@ fun App() {
                     }
                 }
             }
+          } }   // when (page) / AnimatedContent
 
             importMsg?.let { msg ->
                 AlertDialog(onDismissRequest = { importMsg = null }, title = { Text("Import finished") }, text = { Text(msg) },
                     confirmButton = { TextButton({ importMsg = null }) { Text("OK") } })
             }
-            if (showAdmin) AdminPanel(visitors, deviceName,
-                onDeviceName = { deviceName = it; prefs.edit().putString("device", it).apply() },
-                signedIn = employee?.name, onSwitchUser = { showAdmin = false; screen = Screen.Login },
-                onClose = { showAdmin = false }, onExport = { exportData() },
-                onImport = { importPicker.launch(arrayOf("*/*")) },
-                onEdit = { v -> scope.launch { db.dao().update(v) } },
-                onDelete = { v ->
-                    scope.launch {
-                        db.dao().delete(v)
-                        withContext(Dispatchers.IO) { v.cardPhotoPath?.let { File(it).delete() }; Sync.notePhotos(v).forEach { it.delete() } }
-                    }
-                },
-                onClear = { scope.launch { db.dao().clear(); File(ctx.filesDir, "cards").deleteRecursively() } },
-                onRetryThankYou = { v ->
-                    scope.launch {
-                        if (ThankYou.isValidEmail(v.email)) { db.dao().markThankYou(v.uid, ThankYou.QUEUED, 0); ThankYouWorker.enqueue(ctx) }
-                    }
-                })
+            if (confirmDiscard) AlertDialog(
+                onDismissRequest = { confirmDiscard = false },
+                icon = { Icon(Icons.Default.Warning, null, tint = Amber) },
+                title = { Text("Discard this visit?") },
+                text = { Text("The visit in progress hasn't been saved. Start a new visit anyway?") },
+                confirmButton = { TextButton({ confirmDiscard = false; reset(); section = AppPage.Visit }) { Text("Discard", color = Danger) } },
+                dismissButton = { TextButton({ confirmDiscard = false }) { Text("Keep editing") } })
         }
+      }
     }
-}
-
-/** Sender account for the automatic thank-you mail. "Save & send test" mails the account itself, so mistakes show up at once. */
-@Composable
-fun MailSettingsDialog(onDone: () -> Unit) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val initial = remember { SmtpSettings.load(ctx) }
-    var host by remember { mutableStateOf(initial.host.ifBlank { "smtp.gmail.com" }) }
-    var port by remember { mutableStateOf(initial.port.toString()) }
-    var user by remember { mutableStateOf(initial.user) }
-    var password by remember { mutableStateOf(initial.password) }
-    var from by remember { mutableStateOf(initial.from) }
-    var fromName by remember { mutableStateOf(initial.fromName) }
-    var status by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    fun current() = SmtpSettings(host.trim(), port.trim().toIntOrNull() ?: 587, user.trim(), password, from.trim(), fromName.trim())
-    AlertDialog(
-        onDismissRequest = { if (!busy) onDone() },
-        title = { Text("Mail settings") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("The account thank-you e-mails are sent from. For Gmail use smtp.gmail.com, port 587 and an App Password " +
-                    "(Google account > Security > 2-Step Verification > App passwords).", fontSize = 12.sp)
-                OutlinedTextField(host, { host = it }, label = { Text("SMTP server") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(port, { port = it.filter(Char::isDigit).take(5) }, label = { Text("Port (587 or 465)") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(user, { user = it }, label = { Text("Username / e-mail") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(password, { password = it }, label = { Text("Password / app password") }, singleLine = true,
-                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(from, { from = it }, label = { Text("Send from (blank = username)") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(fromName, { fromName = it }, label = { Text("Company name in the e-mail") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth())
-                status?.let { Text(it, fontSize = 13.sp, color = if (it.startsWith("Test mail sent")) PaperInk else Danger) }
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = !busy && current().complete, onClick = {
-                val c = current()
-                if (!ThankYou.isValidEmail(c.user) && !ThankYou.isValidEmail(c.from)) {
-                    status = "Could not send: enter a full e-mail address (name@company.com) as the username."; return@TextButton
-                }
-                if (c.from.isNotBlank() && !ThankYou.isValidEmail(c.from)) {
-                    status = "Could not send: \"Send from\" must be a full e-mail address like name@company.com, or leave it blank."; return@TextButton
-                }
-                busy = true; status = "Sending test mail…"
-                scope.launch {
-                    val err = withContext(Dispatchers.IO) { try { ThankYou.sendTest(c); null } catch (e: Exception) { e.message ?: e.javaClass.simpleName } }
-                    busy = false
-                    if (err == null) { SmtpSettings.save(ctx, c); status = "Test mail sent to ${c.from.ifBlank { c.user }}. Settings saved." }
-                    else status = "Could not send: $err"
-                }
-            }) { Text(if (busy) "Please wait…" else "Save & send test") }
-        },
-        dismissButton = {
-            Row {
-                TextButton(enabled = !busy, onClick = { SmtpSettings.save(ctx, current()); onDone() }) { Text("Save only") }
-                TextButton(enabled = !busy, onClick = onDone) { Text("Close") }
-            }
-        })
 }
 
 val Color_F0C3B8 =androidx.compose.ui.graphics.Color(0xFFF0C3B8)
@@ -632,197 +626,3 @@ fun PaperField(label: String, value: String, singleLine: Boolean = true, hint: S
             focusedLabelColor = PaperInk.copy(alpha = 0.7f), unfocusedLabelColor = PaperInk.copy(alpha = 0.6f),
             cursorColor = Amber))
 
-/** Edit a saved record. The UID, visit time, photos and thank-you status are left untouched. */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Unit) {
-    var name by remember { mutableStateOf(v.name) }
-    var title by remember { mutableStateOf(v.title) }
-    var company by remember { mutableStateOf(v.company) }
-    var email by remember { mutableStateOf(v.email) }
-    var phone by remember { mutableStateOf(v.phone) }
-    var address by remember { mutableStateOf(v.address) }
-    var state by remember { mutableStateOf(v.state) }
-    var country by remember { mutableStateOf(v.country) }
-    var customerType by remember { mutableStateOf(v.customerType) }
-    var market by remember { mutableStateOf(v.marketExposure) }
-    var other by remember { mutableStateOf(v.otherDetail) }
-    var interest by remember { mutableStateOf(v.additionalInterest) }
-    var outcomes by remember { mutableStateOf(v.leadOutcomes.split("; ").filter { it.isNotBlank() }.toSet()) }
-    var notes by remember { mutableStateOf(v.discussionNotes) }
-    var remark by remember { mutableStateOf(v.remarks) }
-    var remarkOther by remember { mutableStateOf(v.remarksOther) }
-    var followNote by remember { mutableStateOf(v.followUpNote) }
-    @Composable fun field(label: String, value: String, multi: Boolean = false, set: (String) -> Unit) =
-        OutlinedTextField(value, set, label = { Text(label) }, singleLine = !multi, minLines = if (multi) 2 else 1,
-            modifier = Modifier.fillMaxWidth())
-    @Composable fun chips(options: List<String>, selected: (String) -> Boolean, pick: (String) -> Unit) =
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            options.forEach { o -> FilterChip(selected(o), { pick(o) }, label = { Text(o) }) }
-        }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Edit visitor") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("ID: ${v.uid}", fontSize = 12.sp, color = Steel)
-                field("Name", name) { name = it }
-                field("Title", title) { title = it }
-                field("Company", company) { company = it }
-                field("Email", email) { email = it }
-                field("Phone", phone) { phone = it }
-                field("Address", address, true) { address = it }
-                field("State", state) { state = it }
-                field("Country", country) { country = it }
-                Text("Customer type", fontSize = 12.sp, color = Steel)
-                chips(CUSTOMER_TYPES, { it == customerType }) { customerType = if (customerType == it) "" else it }
-                Text("Market exposure", fontSize = 12.sp, color = Steel)
-                chips(MARKET_EXPOSURE, { it == market }) { market = if (market == it) "" else it }
-                field("Other product detail", other, true) { other = it }
-                field("Also interested in", interest, true) { interest = it }
-                Text("Lead outcome", fontSize = 12.sp, color = Steel)
-                chips(LEAD_OUTCOMES, { it in outcomes }) { outcomes = if (it in outcomes) outcomes - it else outcomes + it }
-                field("Discussion notes", notes, true) { notes = it }
-                Text("Remarks", fontSize = 12.sp, color = Steel)
-                chips(REMARK_OPTIONS, { it == remark }) { remark = if (remark == it) "" else it }
-                if (remark == "Others") field("Remarks (other)", remarkOther) { remarkOther = it }
-                if (v.followUpAction == "Remarks") field("Follow-up note", followNote, true) { followNote = it }
-            }
-        },
-        confirmButton = {
-            TextButton({
-                val mail = email.trim()
-                onSave(v.copy(name = name.trim(), title = title.trim(), company = company.trim(), email = mail, phone = phone.trim(),
-                    address = address.trim(), state = state.trim(), country = country.trim(),
-                    customerType = customerType, marketExposure = market, otherDetail = other.trim(),
-                    additionalInterest = interest.trim(),
-                    leadOutcomes = LEAD_OUTCOMES.filter { it in outcomes }.joinToString("; "),
-                    discussionNotes = notes.trim(), remarks = remark,
-                    remarksOther = if (remark == "Others") remarkOther.trim() else "",
-                    followUpNote = if (v.followUpAction == "Remarks") followNote.trim() else v.followUpNote,
-                    // a corrected e-mail on a record that had none becomes mailable
-                    thankYouStatus = if (v.thankYouStatus == "" && ThankYou.isValidEmail(mail)) ThankYou.PENDING else v.thankYouStatus))
-            }) { Text("Save") }
-        },
-        dismissButton = { TextButton(onDismiss) { Text("Cancel") } })
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun AdminPanel(visitors: List<Visitor>, deviceName: String, onDeviceName: (String) -> Unit,
-               signedIn: String?, onSwitchUser: () -> Unit,
-               onClose: () -> Unit, onExport: () -> Unit, onImport: () -> Unit,
-               onEdit: (Visitor) -> Unit, onDelete: (Visitor) -> Unit, onClear: () -> Unit, onRetryThankYou: (Visitor) -> Unit) {
-    var editing by remember { mutableStateOf<Visitor?>(null) }
-    var confirmClear by remember { mutableStateOf(false) }
-    var clearText by remember { mutableStateOf("") }
-    var pendingDelete by remember { mutableStateOf<Visitor?>(null) }
-    val fmt = remember { SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()) }
-    Column(Modifier.fillMaxSize().background(NavyDeep).padding(20.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Visitor log (${visitors.size})", fontSize = 26.sp, fontWeight = FontWeight.Bold,
-                fontFamily = Display, modifier = Modifier.weight(1f))
-            PrimaryButton("Close", modifier = Modifier.height(44.dp)) { onClose() }
-        }
-        OutlinedTextField(deviceName, onDeviceName, label = { Text("This device's name (e.g. Stand-A, Priya)") },
-            singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 12.dp), colors = darkFieldColors())
-        Text(if (signedIn != null) "Signed in: $signedIn" else "Not signed in", color = Amber, fontSize = 13.sp,
-            modifier = Modifier.padding(top = 8.dp))
-        FlowRow(Modifier.padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            SecondaryButton("Switch user") { onSwitchUser() }
-            SecondaryButton("Export (zip)") { onExport() }
-            SecondaryButton("Import / merge") { onImport() }
-            SecondaryButton("Clear all") { confirmClear = true }
-        }
-        if (visitors.isEmpty()) Text("No visitors logged yet.", color = Steel, modifier = Modifier.padding(top = 40.dp).fillMaxWidth(), textAlign = TextAlign.Center)
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(visitors, key = { it.id }) { v ->
-                Row(Modifier.fillMaxWidth().clip(Shape6).background(Panel).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (v.cardPhotoPath != null)
-                        AsyncImage(File(v.cardPhotoPath), null, Modifier.size(width = 56.dp, height = 40.dp).clip(RoundedCornerShape(4.dp)),
-                            contentScale = ContentScale.Crop)
-                    Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                        Text(listOf(v.name.ifBlank { "Unnamed visitor" }, v.title).filter { it.isNotBlank() }.joinToString(" · "),
-                            fontWeight = FontWeight.SemiBold)
-                        Text(listOf(v.company, v.email, v.phone).filter { it.isNotBlank() }.joinToString(" · "),
-                            fontSize = 12.sp, color = Steel)
-                        val place = listOf(v.address, v.state, v.country).filter { it.isNotBlank() }.joinToString(", ")
-                        if (place.isNotBlank()) Text(place, fontSize = 12.sp, color = LineDim)
-                        Text("Visited " + fmt.format(Date(v.createdAt)) +
-                            (if (v.attendedByName.isNotBlank()) " · Attended by ${v.attendedByName}" else ""),
-                            fontSize = 12.sp, color = Steel)
-                        Text(listOf(v.customerType, v.marketExposure).filter { it.isNotBlank() }.joinToString(" · "), fontSize = 12.sp, color = Amber)
-                        Text(Catalog.summarize(v.products.split("; ").filter { it.isNotBlank() }), fontSize = 12.sp, color = Amber)
-                        if (v.otherDetail.isNotBlank()) Text(v.otherDetail, fontSize = 12.sp, color = LineDim)
-                        if (v.additionalInterest.isNotBlank()) Text("Also interested in: " + v.additionalInterest, fontSize = 12.sp, color = LineDim)
-                        val notes = Sync.notePhotos(v)
-                        if (notes.isNotEmpty()) Row(Modifier.padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            notes.forEach { AsyncImage(it, "Handwritten enquiry", Modifier.size(40.dp).clip(RoundedCornerShape(4.dp)),
-                                contentScale = ContentScale.Crop) }
-                        }
-                        if (v.leadOutcomes.isNotBlank()) Text("Outcome: " + v.leadOutcomes.replace("; ", " · "), fontSize = 12.sp, color = Amber)
-                        val remark = if (v.remarks == "Others" && v.remarksOther.isNotBlank()) "Others: ${v.remarksOther}" else v.remarks
-                        if (remark.isNotBlank()) Text("Remarks: $remark", fontSize = 12.sp, color = LineDim)
-                        val follow = listOf(v.followUpAction, if (v.followUpAt > 0) fmt.format(Date(v.followUpAt)) else "", v.followUpNote)
-                            .filter { it.isNotBlank() }.joinToString(" · ")
-                        if (follow.isNotBlank()) Text("Follow-up: $follow", fontSize = 12.sp, color = LineDim)
-                        if (v.discussionNotes.isNotBlank())
-                            Text(v.discussionNotes, fontSize = 12.sp, color = LineDim, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                        when (v.thankYouStatus) {
-                            ThankYou.SENT -> Text("Thank-you mail sent " + fmt.format(Date(v.thankYouSentAt)), fontSize = 12.sp, color = Steel)
-                            ThankYou.QUEUED -> Text("Thank-you mail queued, sends when online", fontSize = 12.sp, color = Amber)
-                            ThankYou.PENDING -> Text("Thank-you mail not sent yet", fontSize = 12.sp, color = Amber)
-                            ThankYou.FAILED -> Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Thank-you mail failed", fontSize = 12.sp, color = Danger)
-                                TextButton({ onRetryThankYou(v) }) { Text("Retry", fontSize = 12.sp) }
-                            }
-                        }
-                    }
-                    IconButton({ editing = v }) { Icon(Icons.Default.Edit, "Edit", tint = Steel) }
-                    IconButton({ pendingDelete = v }) { Icon(Icons.Default.Delete, "Delete", tint = Steel) }
-                }
-            }
-        }
-    }
-    editing?.let { v -> EditVisitorDialog(v, onDismiss = { editing = null }, onSave = { onEdit(it); editing = null }) }
-    pendingDelete?.let { v ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            icon = { Icon(Icons.Default.Delete, null, tint = Danger) },
-            title = { Text("Delete this visitor?") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(listOf(v.name.ifBlank { "Unnamed visitor" }, v.company).filter { it.isNotBlank() }.joinToString(" · "),
-                        fontWeight = FontWeight.SemiBold)
-                    Text("Visited " + fmt.format(Date(v.createdAt)), fontSize = 13.sp)
-                    Text("Their details, card photo and attached images will be removed from this phone. This can't be undone.")
-                }
-            },
-            confirmButton = { TextButton({ onDelete(v); pendingDelete = null }) { Text("Delete", color = Danger) } },
-            dismissButton = { TextButton({ pendingDelete = null }) { Text("Cancel") } })
-    }
-    if (confirmClear) AlertDialog(
-        onDismissRequest = { confirmClear = false; clearText = "" },
-        icon = { Icon(Icons.Default.Warning, null, tint = Danger) },
-        title = { Text("Delete all ${visitors.size} visitors?") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Every visitor on this phone, with card photos and attached images, will be permanently deleted. " +
-                    "Export first if this data hasn't been merged yet.")
-                OutlinedTextField(clearText, { clearText = it }, singleLine = true,
-                    label = { Text("Type DELETE to confirm") }, modifier = Modifier.fillMaxWidth())
-            }
-        },
-        confirmButton = {
-            TextButton({ onClear(); confirmClear = false; clearText = "" }, enabled = clearText.trim() == "DELETE") {
-                Text("Delete all", color = if (clearText.trim() == "DELETE") Danger else Steel)
-            }
-        },
-        dismissButton = {
-            Row {
-                TextButton({ confirmClear = false; clearText = ""; onExport() }) { Text("Export first") }
-                TextButton({ confirmClear = false; clearText = "" }) { Text("Cancel") }
-            }
-        })
-}
