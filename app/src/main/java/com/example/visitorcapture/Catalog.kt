@@ -1,6 +1,7 @@
 package com.example.visitorcapture
 
-data class Section(val title: String?, val items: List<String>)
+/** [freeText]: no chips, just a text box; whatever is typed is stored as the item under [title]. */
+data class Section(val title: String?, val items: List<String>, val freeText: Boolean = false)
 data class Machine(val name: String, val sections: List<Section>)
 
 /** Product catalogue: Product -> Machine -> (Section) -> Make / Model / Retrofit kit */
@@ -31,7 +32,7 @@ object Catalog {
             sec("Others", "Others")),
         m("TFO", brands("Murata", "Savio", "Veejay", "Others")),
         m("SSM Winding", brands("Xeno", "XENO-YW", "XENO1", "XENO2")),
-        m("Open-End", brands("Rieter", "Saurer", "Others")),
+        m("Open-End", brands("Rieter", "Saurer", "Titan", "Others")),
         m("OHTC", brands(*OHTC)),
         m("YCP", brands("ELGI", "Mohler", "Sieger", "Xorella")),
         m("Humidification Plant", brands(*HUMID)),
@@ -42,6 +43,9 @@ object Catalog {
 
     /** A make with no retrofit listed yet: a single chip with the make's name, so the visitor can still record it. */
     private fun bare(make: String) = sec(make, make)
+
+    /** "Others" make in Retrofits: the visitor types what they need instead of picking from a list. */
+    private val OTHERS = Section("Others", emptyList(), freeText = true)
 
     private const val THERMISTOR = "Thermistor protection unit"
     private const val EARTH = "Earth stop motion unit"
@@ -59,41 +63,36 @@ object Catalog {
             sec("LMW", "Control panel PLC conversion", "Chute Contifeed PLC system"),
             sec("Rieter", "Control panel PLC conversion"),
             sec("Trutzschler", "Control panel PLC conversion", "Chute Contifeed PLC system"),
-            sec("Others", "Control panel PLC conversion", "Chute Contifeed PLC system")),
+            OTHERS),
         m("Carding",
             sec("LMW", "Control panel PLC conversion", "HMI conversion", "Analog sensor", THERMISTOR),
             sec("Rieter", "Control panel PLC conversion", "Inverter conversion", THERMISTOR),
             sec("Trutzschler", "Control panel PLC conversion", "Inverter conversion", "Pressure transducer", THERMISTOR),
-            sec("Others", "Control panel PLC conversion", "HMI conversion", "Analog sensor", "Inverter conversion",
-                "Pressure transducer", THERMISTOR)),
+            OTHERS),
         m("Draw Frame",
             sec("LMW", "Sliver monitoring HMI conversion", EARTH, THERMISTOR),
             sec("Rieter", "B2 conversion kit", "Sliver monitoring HMI conversion", "DC to AC drive conversion", EARTH, THERMISTOR),
             bare("Trutzschler"),
-            sec("Others", "Sliver monitoring HMI conversion", "B2 conversion kit", "DC to AC drive conversion", EARTH, THERMISTOR)),
-        m("Comber", *arrayOf("LMW", "Rieter", "Trutzschler", "Others")
-            .map { sec(it, "HMI conversion", EARTH, THERMISTOR) }.toTypedArray()),
-        m("Lap Former", sec("LMW", "HMI conversion"), bare("Rieter"), bare("Others")),
+            OTHERS),
+        m("Comber", *arrayOf("LMW", "Rieter").map { sec(it, "HMI conversion", EARTH, THERMISTOR) }.toTypedArray(), OTHERS),
+        m("Lap Former", sec("LMW", "HMI conversion"), sec("Rieter", "HMI conversion"), OTHERS),
         m("Simplex / Roving Frame / Speed Frame",
             sec("LMW", "Servo drive PLC conversion", "PLC conversion", "Electrical panel rewiring", PHOTO, FEATHER_SW,
                 "AC drive conversion"),
             sec("Zinser", PHOTO, FEATHER_SW),
-            bare("Rieter"),
-            sec("Others", "Servo drive PLC conversion", "PLC conversion", "Electrical panel rewiring", PHOTO, FEATHER_SW,
-                "AC drive conversion")),
+            OTHERS),
         m("Spinning",
             sec("LMW", "StepSpeed controller", "PLC conversion", "HMI conversion", "Naren beltless drive conversion"),
-            sec("Rieter", "Naren beltless drive conversion"),
-            bare("Zinser"),
-            sec("Others", "StepSpeed controller", "PLC conversion", "HMI conversion", "Naren beltless drive conversion")),
-        m("Winding - Rieter", sec("AC 338 / 338 Gold", FEATHER_PCB, "Pressure transducer")),
+            OTHERS),
+        m("Winding - Rieter", sec("AC 338 / 338 Gold", FEATHER_PCB, "Pressure transducer"), OTHERS),
         m("Winding - Savio",
             sec("Espero", SUCTION),
             sec("Orion", SUCTION, FEELER, FEATHER_PCB),
             sec("Polar", SUCTION, FEELER, FEATHER_PCB),
-            sec("Eco Pulsar", FEELER, FEATHER_PCB)),
+            sec("Eco Pulsar", FEELER, FEATHER_PCB),
+            OTHERS),
         m("OHTC", sec("ELGI", "PLC conversion"), bare("SIMTA"), bare("LUWA"), bare("Electro-Jet")),
-        m("Humidification Plant", *HUMID.map { sec(it, *HUMID_KITS) }.toTypedArray()),
+        m("Humidification Plant", *HUMID.map { if (it == "Others") OTHERS else sec(it, *HUMID_KITS) }.toTypedArray()),
         m("Compressor", brands("Digital pressure monitoring display unit (4 inch / 8 inch)"))
     )
 
@@ -109,6 +108,13 @@ object Catalog {
 
     fun path(product: String, machine: Machine, section: Section, item: String) =
         listOfNotNull(product, machine.name, section.title?.takeIf { it != item }, item).joinToString(" > ")
+
+    /** Path prefix under which whatever is typed into a free-text section is stored. */
+    fun freeTextPrefix(product: String, machine: Machine, section: Section) =
+        listOfNotNull(product, machine.name, section.title).joinToString(" > ") + " > "
+
+    /** Typed text cleaned so it can't break the " > " path or the "; " list separators. */
+    fun cleanFreeText(text: String) = text.replace(">", "-").replace(";", ",").replace("\n", " ")
 
     fun paths(product: String, machine: Machine) =
         if (machine.sections.isEmpty()) listOf("$product > ${machine.name}")

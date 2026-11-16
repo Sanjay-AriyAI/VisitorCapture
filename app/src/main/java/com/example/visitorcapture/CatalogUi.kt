@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -47,7 +48,10 @@ fun CatalogScreen(
             }, color = Steel)
             machines.forEach { m ->
                 val all = Catalog.paths(product, m)
-                val n = all.count { it in selected }
+                val ticked = all.count { it in selected }
+                val typed = m.sections.filter { it.freeText }
+                    .count { s -> selected.any { it.startsWith(Catalog.freeTextPrefix(product, m, s)) } }
+                val n = ticked + typed
                 val leaf = m.sections.isEmpty()   // nothing to expand: tapping the card ticks it
                 val isOpen = open == m.name
                 Column(
@@ -76,15 +80,25 @@ fun CatalogScreen(
                     ) {
                         m.sections.forEach { s ->
                             s.title?.let { Text(it.uppercase(), fontSize = 11.sp, color = Steel, letterSpacing = 1.sp) }
-                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            if (s.freeText) {
+                                // Whatever is typed is stored as one path "<product> > <machine> > Others > <text>".
+                                val prefix = Catalog.freeTextPrefix(product, m, s)
+                                val old = selected.filter { it.startsWith(prefix) }
+                                PaperField("Enter details", old.firstOrNull()?.removePrefix(prefix).orEmpty(), null,
+                                    singleLine = false, caps = KeyboardCapitalization.Sentences, last = true) { text ->
+                                    if (old.isNotEmpty()) onSetMany(old, false)
+                                    val clean = Catalog.cleanFreeText(text)
+                                    if (clean.isNotBlank()) onSetMany(listOf(prefix + clean), true)
+                                }
+                            } else FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 s.items.forEach { item ->
                                     val p = Catalog.path(product, m, s, item)
                                     OptionChip(item, p in selected) { onToggle(p) }
                                 }
                             }
                         }
-                        LinkButton(if (n == all.size) "Clear all for ${m.name}" else "Select everything for ${m.name}") {
-                            onSetMany(all, n != all.size)
+                        LinkButton(if (ticked == all.size) "Clear all for ${m.name}" else "Select everything for ${m.name}") {
+                            onSetMany(all, ticked != all.size)
                         }
                     }
                 }
