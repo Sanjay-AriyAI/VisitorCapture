@@ -11,8 +11,12 @@ def read(path):
         with z.open("visitors.csv") as f:
             rows = list(csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig", newline="")))
         for n in z.namelist():
-            if n.startswith("photos/") and not n.endswith("/"):
+            parts = n.split("/")
+            if n.startswith("photos/") and not n.endswith("/"):      # older exports
                 photos[os.path.basename(n)] = (z, n)
+            elif len(parts) == 3 and parts[0] == "leads" and parts[2] == "business-card.jpg":
+                uid = parts[1].split(" - ")[0].strip()              # leads/<UID - Name - Company>/
+                photos[uid + ".jpg"] = (z, n)
     else:
         with open(path, encoding="utf-8-sig", newline="") as f:
             rows = list(csv.DictReader(f))
