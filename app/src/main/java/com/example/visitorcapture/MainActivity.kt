@@ -339,9 +339,11 @@ fun App() {
         scope.launch { snackbar.showSnackbar("Profile updated") }
     }
 
-    fun exportData() {
+    /** Zip [list] (all visitors, or those in [range]) and open the share sheet. */
+    fun exportData(list: List<Visitor> = visitors, range: DateRange? = null) {
+        if (list.isEmpty()) { scope.launch { snackbar.showSnackbar("No visitors to export") }; return }
         scope.launch {
-            val f = withContext(Dispatchers.IO) { Sync.exportZip(ctx, visitors, deviceName) }
+            val f = withContext(Dispatchers.IO) { Sync.exportZip(ctx, list, employee?.name.orEmpty(), deviceName, range) }
             val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", f)
             ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
                 type = "application/zip"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -425,7 +427,7 @@ fun App() {
             AppPage.Profile -> ProfileScreen(employee, visitors, onSwitchUser = { switchUser() },
                 onEdit = { updated -> editProfile(updated) }, onBack = { section = AppPage.Visit })
             AppPage.Logs -> VisitorLogScreen(visitors, onBack = { section = AppPage.Visit },
-                onExport = { exportData() }, onImport = { importPicker.launch(arrayOf("*/*")) },
+                onExport = { list, range -> exportData(list, range) }, onImport = { importPicker.launch(arrayOf("*/*")) },
                 onEdit = { edited ->
                     // Already mailed and the visitor-facing details changed: send the "updated, final version" mail.
                     val old = visitors.find { it.uid == edited.uid }

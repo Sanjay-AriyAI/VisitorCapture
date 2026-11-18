@@ -151,19 +151,4 @@ private fun ExactAlarmDialog(onDone: () -> Unit) {
         },
         dismissButton = { TextButton({ done() }) { Text("Not now") } })
 }
-
-// The date picker works in UTC midnights; these convert to and from the phone's own calendar day,
-// so a date picked late in the evening never lands on the neighbouring day.
-private fun utcDay(local: Long): Long {
-    val l = Calendar.getInstance().apply { timeInMillis = local }
-    return Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
-        clear(); set(l.get(Calendar.YEAR), l.get(Calendar.MONTH), l.get(Calendar.DAY_OF_MONTH))
-    }.timeInMillis
-}
-
-private fun localAt(utcDay: Long, hour: Int, minute: Int): Long {
-    val u = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply { timeInMillis = utcDay }
-    return Calendar.getInstance().apply {
-        clear(); set(u.get(Calendar.YEAR), u.get(Calendar.MONTH), u.get(Calendar.DAY_OF_MONTH), hour, minute)
-    }.timeInMillis
-}
+// utcDay() / localAt() (date picker UTC midnights ↔ the phone's calendar day) live in DateRange.kt.

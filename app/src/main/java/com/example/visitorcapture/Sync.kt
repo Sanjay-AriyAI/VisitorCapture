@@ -113,13 +113,12 @@ object Sync {
     }
 
     /** Zip with visitors.csv (all leads) + leads/<UID - Name - Company>/ holding details.txt,
-     *  business-card.jpg, business-card-back.jpg (if taken) and handwritten-note-N.<ext> for each lead. */
-    fun exportZip(ctx: Context, list: List<Visitor>, device: String): File {
+     *  business-card.jpg, business-card-back.jpg (if taken) and handwritten-note-N.<ext> for each lead.
+     *  Named <agent>-<device>-<from>-<to>.zip, e.g. Sanjay_S-moto_g54_5G-20261110-20261113.zip (see [exportName]). */
+    fun exportZip(ctx: Context, list: List<Visitor>, agent: String, device: String, range: DateRange? = null): File {
         val dir = File(ctx.cacheDir, "exports").apply { mkdirs() }
         dir.listFiles()?.forEach { it.delete() }
-        val stamp = SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(Date())
-        val safe = device.replace(Regex("[^A-Za-z0-9_-]"), "_").ifBlank { "device" }
-        val f = File(dir, "visitors-$safe-$stamp.zip")
+        val f = File(dir, exportName(agent, device, range, list))
         ZipOutputStream(f.outputStream().buffered()).use { z ->
             z.putNextEntry(ZipEntry("visitors.csv")); z.write(toCsv(list).toByteArray(Charsets.UTF_8)); z.closeEntry()
             list.distinctBy { it.uid }.forEach { v ->
@@ -143,6 +142,22 @@ object Sync {
             }
         }
         return f
+    }
+
+    /**
+     * <agent>-<device>-<fromDate>-<toDate>.zip with dates as yyyyMMdd. With no [range] ("All dates") the
+     * dates are the first and last visit in [list]. Characters other than letters, digits and _ become "_",
+     * so the "-" separators stay unambiguous.
+     */
+    fun exportName(agent: String, device: String, range: DateRange?, list: List<Visitor>): String {
+        fun safe(s: String, fallback: String) =
+            s.trim().replace(Regex("[^A-Za-z0-9_]+"), "_").trim('_').ifBlank { fallback }
+        val r = range ?: list.takeIf { it.isNotEmpty() }?.let { l ->
+            DateRange.days(l.minOf { it.createdAt }, l.maxOf { it.createdAt })
+        }
+        val day = SimpleDateFormat("yyyyMMdd", Locale.US)
+        val dates = r?.let { "-" + day.format(Date(it.from)) + "-" + day.format(Date(it.lastDay)) } ?: ""
+        return safe(agent, "agent") + "-" + safe(device, "device") + dates + ".zip"
     }
 
     fun parseCsv(text: String): List<List<String>> {

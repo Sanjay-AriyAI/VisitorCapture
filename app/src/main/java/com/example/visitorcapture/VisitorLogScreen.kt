@@ -15,6 +15,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,16 +50,22 @@ private fun dayLabel(at: Long): String {
     }
 }
 
-/** Every visitor saved on this phone, newest first. Export / import / clear sit in the ⋮ menu of the top bar. */
+/**
+ * Every visitor saved on this phone, newest first. Export / import / clear sit in the ⋮ menu of the top bar.
+ * The date chip narrows the list to a day or range of visit dates; Export starts from that same range.
+ */
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 fun VisitorLogScreen(
     visitors: List<Visitor>, onBack: () -> Unit,
-    onExport: () -> Unit, onImport: () -> Unit,
+    onExport: (List<Visitor>, DateRange?) -> Unit, onImport: () -> Unit,
     onEdit: (Visitor) -> Unit, onDelete: (Visitor) -> Unit, onClear: () -> Unit, onRetryThankYou: (Visitor) -> Unit
 ) {
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(LogFilter.All) }
+    var range by rememberSaveable(stateSaver = DateRangeSaver) { mutableStateOf<DateRange?>(null) }
+    var pickingRange by remember { mutableStateOf(false) }
+    var exporting by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(setOf<Long>()) }
     var editing by remember { mutableStateOf<Visitor?>(null) }
@@ -66,20 +74,22 @@ fun VisitorLogScreen(
     var clearText by remember { mutableStateOf("") }
     val fmt = remember { SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()) }
     val today = remember { startOfToday() }
-    val shown = remember(visitors, query, filter) {
+    val inRange = remember(visitors, range) { range?.let { r -> visitors.filter { it.createdAt in r } } ?: visitors }
+    // search + status chip (everything but the dates)
+    val matchesView: (Visitor) -> Boolean = remember(query, filter) {
         val q = query.trim().lowercase()
-        visitors.filter { v ->
-            filter.matches(v, today) && (q.isEmpty() ||
-                listOf(v.name, v.company, v.email, v.extraEmails, v.phone, v.title).any { it.lowercase().contains(q) })
-        }
+        val match: (Visitor) -> Boolean = { v -> filter.matches(v, today) && (q.isEmpty() ||
+            listOf(v.name, v.company, v.email, v.extraEmails, v.phone, v.title).any { it.lowercase().contains(q) }) }
+        match
     }
+    val shown = remember(inRange, matchesView) { inRange.filter(matchesView) }
 
     Column(Modifier.fillMaxSize()) {
-        SectionTopBar("Visitor logs (${visitors.size})", onBack) {
+        SectionTopBar(if (range == null) "Visitor logs (${visitors.size})" else "Visitor logs (${inRange.size}/${visitors.size})", onBack) {
             Box {
                 IconButton({ menuOpen = true }) { Icon(Icons.Default.MoreVert, "More options", tint = LineC) }
                 DropdownMenu(menuOpen, { menuOpen = false }, containerColor = PanelOn) {
-                    DropdownMenuItem({ Text("Export (zip)", color = LineC) }, { menuOpen = false; onExport() },
+                    DropdownMenuItem({ Text("Export (zip)…", color = LineC) }, { menuOpen = false; exporting = true },
                         leadingIcon = { Icon(Icons.Default.Upload, null, tint = LineDim) }, enabled = visitors.isNotEmpty())
                     DropdownMenuItem({ Text("Import / merge", color = LineC) }, { menuOpen = false; onImport() },
                         leadingIcon = { Icon(Icons.Default.Download, null, tint = LineDim) })
@@ -96,9 +106,10 @@ fun VisitorLogScreen(
                 trailingIcon = if (query.isNotEmpty()) ({ IconButton({ query = "" }) { Icon(Icons.Default.Close, "Clear search") } }) else null,
                 shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 10.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                DateChip(range, onClick = { pickingRange = true }, onClear = { range = null })
                 LogFilter.values().forEach { f ->
-                    val n = visitors.count { f.matches(it, today) }
+                    val n = inRange.count { f.matches(it, today) }
                     OptionChip("${f.label} ($n)", filter == f) { filter = f }
                 }
             }
@@ -110,7 +121,12 @@ fun VisitorLogScreen(
                     tint = AmberText, modifier = Modifier.size(36.dp))
             }
             Text(if (visitors.isEmpty()) "No visitors yet" else "No visitors match", style = MaterialTheme.typography.titleLarge, color = LineC)
-            Text(if (visitors.isEmpty()) "Visitors you log will appear here." else "Try another search or filter.", color = Steel)
+            Text(when {
+                visitors.isEmpty() -> "Visitors you log will appear here."
+                range != null && inRange.isEmpty() -> "No visits on ${range!!.label()}. Try other dates."
+                else -> "Try another search or filter."
+            }, color = Steel, textAlign = TextAlign.Center)
+            if (range != null) LinkButton("Show all dates") { range = null }
         }
         // newest first, grouped under sticky day headers
         val days = remember(shown) { shown.groupBy { dayLabel(it.createdAt) } }
@@ -136,6 +152,9 @@ fun VisitorLogScreen(
     }
 
     editing?.let { v -> EditVisitorDialog(v, onDismiss = { editing = null }, onSave = { onEdit(it); editing = null }) }
+    if (pickingRange) DateRangeDialog(range, onPick = { range = it; pickingRange = false }, onDismiss = { pickingRange = false })
+    if (exporting) ExportDialog(visitors, range, matchesView, narrowed = query.isNotBlank() || filter != LogFilter.All,
+        onExport = { list, r -> exporting = false; onExport(list, r) }, onDismiss = { exporting = false })
     if (confirmClear) AlertDialog(
         onDismissRequest = { confirmClear = false; clearText = "" },
         icon = { Icon(Icons.Default.Warning, null, tint = Danger) },
@@ -155,10 +174,146 @@ fun VisitorLogScreen(
         },
         dismissButton = {
             Row {
-                TextButton({ confirmClear = false; clearText = ""; onExport() }) { Text("Export first") }
+                TextButton({ confirmClear = false; clearText = ""; onExport(visitors, null) }) { Text("Export first") }
                 TextButton({ confirmClear = false; clearText = "" }) { Text("Cancel") }
             }
         })
+}
+
+private val DateRangeSaver = Saver<DateRange?, LongArray>(
+    save = { r -> r?.let { longArrayOf(it.from, it.to) } ?: longArrayOf() },
+    restore = { a -> if (a.size == 2) DateRange(a[0], a[1]) else null })
+
+/** "All dates" or the chosen range; tapping opens the picker, ✕ goes back to all dates. */
+@Composable
+private fun DateChip(range: DateRange?, onClick: () -> Unit, onClear: () -> Unit) {
+    val on = range != null
+    FilterChip(on, onClick,
+        label = { Text(range?.label() ?: "All dates", fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium) },
+        shape = RoundedCornerShape(50),
+        leadingIcon = { Icon(Icons.Default.DateRange, null, Modifier.size(16.dp)) },
+        trailingIcon = if (on) ({
+            Icon(Icons.Default.Close, "Show all dates", Modifier.size(18.dp).clip(CircleShape).clickable(onClick = onClear))
+        }) else null,
+        colors = FilterChipDefaults.filterChipColors(
+            containerColor = Panel, labelColor = LineC, iconColor = LineDim,
+            selectedContainerColor = Amber, selectedLabelColor = OnAmber,
+            selectedLeadingIconColor = OnAmber, selectedTrailingIconColor = OnAmber),
+        border = FilterChipDefaults.filterChipBorder(enabled = true, selected = on,
+            borderColor = if (IsDark) LineDim.copy(alpha = 0.35f) else Outline, selectedBorderColor = Amber))
+}
+
+/**
+ * Calendar for visit dates: tap the From day, then the To day (one tap = that single day).
+ * Quick chips above the calendar fill in Today / Yesterday / Last 7 days / This month; "All dates" clears the filter.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DateRangeDialog(initial: DateRange?, onPick: (DateRange?) -> Unit, onDismiss: () -> Unit) {
+    val today = remember { startOfToday() }
+    val todayUtc = remember { utcDay(System.currentTimeMillis()) }
+    val state = rememberDateRangePickerState(
+        initialSelectedStartDateMillis = initial?.let { utcDay(it.from) },
+        initialSelectedEndDateMillis = initial?.let { utcDay(it.lastDay) },
+        initialDisplayedMonthMillis = initial?.let { utcDay(it.lastDay) } ?: todayUtc,
+        selectableDates = object : SelectableDates {
+            override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= todayUtc
+        })
+    val start = state.selectedStartDateMillis
+    val end = state.selectedEndDateMillis
+    val picked = start?.let { DateRange.fromPicker(it, end) }
+    val dayFmt = remember { SimpleDateFormat("d MMM yyyy", Locale.getDefault()).apply { timeZone = TimeZone.getTimeZone("UTC") } }
+
+    DatePickerDialog(onDismissRequest = onDismiss,
+        confirmButton = { TextButton({ onPick(picked) }, enabled = picked != null) { Text("Apply") } },
+        dismissButton = {
+            Row {
+                TextButton({ onPick(null) }) { Text("All dates") }
+                TextButton(onDismiss) { Text("Cancel") }
+            }
+        }) {
+        DateRangePicker(state, Modifier.weight(1f), showModeToggle = false,
+            title = {
+                Column(Modifier.padding(start = 20.dp, end = 12.dp, top = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Visit dates", style = MaterialTheme.typography.labelLarge)
+                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DatePreset.values().forEach { p ->
+                            val r = p.range(today)
+                            OptionChip(p.label, picked == r) {
+                                state.setSelection(utcDay(r.from), utcDay(r.lastDay))
+                                state.displayedMonthMillis = utcDay(r.lastDay)
+                            }
+                        }
+                    }
+                }
+            },
+            headline = {
+                Column(Modifier.padding(start = 20.dp, end = 12.dp, bottom = 8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        DateBox("From", start?.let { dayFmt.format(Date(it)) }, active = start == null, Modifier.weight(1f))
+                        DateBox("To", end?.let { dayFmt.format(Date(it)) } ?: start?.let { "Same day" },
+                            active = start != null && end == null, Modifier.weight(1f))
+                    }
+                    Text(when {
+                        start == null -> "Tap the first day"
+                        end == null -> "Tap the last day, or Apply for just this day"
+                        else -> picked!!.let { r -> ((r.to - r.from + 3_600_000L) / 86_400_000L).let { n ->
+                            if (n == 1L) "1 day selected" else "$n days selected" } }
+                    }, fontSize = 12.sp, color = Steel, modifier = Modifier.padding(top = 6.dp))
+                }
+            })
+    }
+}
+
+/** One end of the range in the calendar header; [active] marks the end the next tap will set. */
+@Composable
+private fun DateBox(label: String, value: String?, active: Boolean, modifier: Modifier = Modifier) {
+    Column(modifier.clip(RoundedCornerShape(12.dp))
+        .background(if (active) Amber.copy(alpha = 0.16f) else LineC.copy(alpha = 0.06f))
+        .padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Text(label.uppercase(), fontSize = 10.sp, letterSpacing = 0.8.sp, color = if (active) AmberText else Steel)
+        Text(value ?: "Select", fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+            color = if (value == null) Steel else LineC, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** Export confirmation: which visit dates go into the zip, how many visitors that is. */
+@Composable
+private fun ExportDialog(visitors: List<Visitor>, initial: DateRange?, matchesView: (Visitor) -> Boolean, narrowed: Boolean,
+                         onExport: (List<Visitor>, DateRange?) -> Unit, onDismiss: () -> Unit) {
+    var range by remember { mutableStateOf(initial) }
+    var onlyShown by remember { mutableStateOf(false) }
+    var picking by remember { mutableStateOf(false) }
+    val list = remember(visitors, range, onlyShown) {
+        visitors.filter { v -> (range == null || v.createdAt in range!!) && (!onlyShown || matchesView(v)) }
+    }
+    if (picking) { DateRangeDialog(range, onPick = { range = it; picking = false }, onDismiss = { picking = false }); return }
+    AlertDialog(onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.Upload, null) },
+        title = { Text("Export visitors") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable { picking = true }.padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.DateRange, null, tint = Steel)
+                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                        Text("VISIT DATES", fontSize = 10.sp, color = Steel, letterSpacing = 0.8.sp)
+                        Text(range?.label() ?: "All dates", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Text("Change", color = AmberText, fontSize = 13.sp)
+                }
+                if (narrowed) Row(Modifier.fillMaxWidth().clickable { onlyShown = !onlyShown },
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(onlyShown, { onlyShown = it })
+                    Text("Only visitors matching the current search and status filter", fontSize = 13.sp)
+                }
+                Text(if (list.isEmpty()) "No visitors in this range." else
+                    "${list.size} visitor${if (list.size == 1) "" else "s"} with card photos and notes will be zipped.",
+                    color = if (list.isEmpty()) Danger else Steel, fontSize = 13.sp)
+            }
+        },
+        confirmButton = { TextButton({ onExport(list, range) }, enabled = list.isNotEmpty()) { Text("Export ${list.size}") } },
+        dismissButton = { TextButton(onDismiss) { Text("Cancel") } })
 }
 
 /** Compact card: who, when and a few tags. Tapping it slides open the full record. */
