@@ -19,6 +19,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -64,6 +65,7 @@ val PRODUCTS = listOf("Mechanical Spares", "Electronics Spares", "Retrofits", "O
 val LEAD_OUTCOMES = listOf("Product Enquiry", "Sample Request", "General Enquiry", "Order", "Factory Visit", "Follow-up")
 val REMARK_OPTIONS = listOf("Call Back", "Factory Visit", "Need Follow-up", "Others")
 const val MAX_NOTE_PHOTOS = 5   // handwritten-enquiry images per visit
+val EXTRA_EMAIL_LABELS = listOf("Secondary e-mail", "Third e-mail")   // one per extra field, MAX_EMAILS - 1 of them
 val STEP_LABELS = listOf("Scan", "Details", "Customer", "Products", "Outcome", "Done")
 
 enum class Screen(val step: Int) {
@@ -73,6 +75,8 @@ enum class Screen(val step: Int) {
 data class Form(
     val name: String = "", val title: String = "", val company: String = "",
     val phone: String = "", val email: String = "",
+    val extraEmails: List<String> = emptyList(),   // secondary / third e-mail fields, at most MAX_EMAILS - 1
+    val website: String = "",
     val address: String = "", val state: String = "", val country: String = "",
     val customerType: String? = null, val marketExposure: String? = null,
     val products: Set<String> = emptySet(), val otherDetail: String = "",
@@ -115,6 +119,10 @@ fun App() {
     var form by remember { mutableStateOf(Form()) }
     var photoFile by remember { mutableStateOf<File?>(null) }
     var photoTaken by remember { mutableStateOf(false) }
+    // Optional photo of the back of the card: read together with the front, but never required.
+    var backFile by remember { mutableStateOf<File?>(null) }
+    var backTaken by remember { mutableStateOf(false) }
+    var shootingBack by remember { mutableStateOf(false) }                    // which side the open camera is for
     var ocrError by remember { mutableStateOf(false) }
     // Per-field "please check" notes from the card reader; a note disappears as soon as the visitor edits that field.
     var fieldHints by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
@@ -151,16 +159,23 @@ fun App() {
         persistExtra()
         lastUid = null; extraNote = ""; extraSaved = ""
         notePhotos = emptyList(); pendingNote = null; noteBusy = false; noteError = null
-        form = Form(); photoFile = null; photoTaken = false; ocrError = false; fieldHints = emptyMap(); nameError = false; visitStart = 0L; screen = Screen.Welcome
+        form = Form(); photoFile = null; photoTaken = false; backFile = null; backTaken = false
+        ocrError = false; fieldHints = emptyMap(); nameError = false; visitStart = 0L; screen = Screen.Welcome
+    }
+
+    /** Manual entry: forget any card photos taken for this visit. */
+    fun dropPhotos() {
+        photoFile = null; photoTaken = false; backFile = null; backTaken = false; ocrError = false; fieldHints = emptyMap()
     }
 
     fun runOcr(file: File) {
         screen = Screen.Processing
+        val back = if (backTaken) backFile else null
         scope.launch {
-            val p = try { withContext(Dispatchers.Default) { CardReader.read(ctx, file) } } catch (e: Exception) { null }
+            val p = try { withContext(Dispatchers.Default) { CardReader.read(ctx, file, back) } } catch (e: Exception) { null }
             if (p == null) { ocrError = true; fieldHints = emptyMap() }
             else {
-                form = form.copy(name = p.name, title = p.title, company = p.company, phone = p.phone, email = p.email,
+                form = form.copy(name = p.name, title = p.title, company = p.company, phone = p.phone, email = p.email, extraEmails = p.extraEmails, website = p.website,
                     address = p.address, state = p.state, country = p.country.ifBlank { appSettings.defaultCountry.trim() })
                 fieldHints = p.flags; ocrError = false; ocrRaw = p.raw
             }
@@ -169,16 +184,19 @@ fun App() {
     }
 
     val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
-        if (ok) photoTaken = true else { photoFile = null; photoTaken = false }
+        if (shootingBack) { if (ok) backTaken = true else { backFile = null; backTaken = false } }
+        else if (ok) photoTaken = true else { photoFile = null; photoTaken = false }
     }
     fun launchCamera() {
         val dir = File(ctx.filesDir, "cards").apply { mkdirs() }
-        val f = File(dir, "card_${System.currentTimeMillis()}.jpg")
-        photoFile = f; photoTaken = false
+        val f = File(dir, "card_${System.currentTimeMillis()}${if (shootingBack) "_back" else ""}.jpg")
+        if (shootingBack) { backFile = f; backTaken = false } else { photoFile = f; photoTaken = false }
         takePicture.launch(FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", f))
     }
     val camPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) launchCamera() }
-    fun openCamera() {
+    /** Opens the camera for the front of the card, or for the optional back when [back] is true. */
+    fun openCamera(back: Boolean = false) {
+        shootingBack = back
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchCamera()
         else camPerm.launch(Manifest.permission.CAMERA)
     }
@@ -260,12 +278,14 @@ fun App() {
         val factoryAt = if (Reminder.FACTORY.outcome in form.outcomes) form.factoryVisitAt else 0L
         val followAt = if (Reminder.FOLLOW_UP.outcome in form.outcomes) form.followUpAt else 0L
         val uidPrefix = UidGen.prefix(e?.name.orEmpty(), deviceName, at)
+        val (mainEmail, extraEmails) = splitEmails(form.email, form.extraEmails)
         val v = Visitor(uid = uidPrefix, deviceName = deviceName,
-            name = form.name, title = form.title, company = form.company, email = form.email, phone = form.phone,
+            name = form.name, title = form.title, company = form.company, email = mainEmail, extraEmails = extraEmails, website = form.website.trim(), phone = form.phone,
             address = form.address.trim(), state = form.state.trim(), country = form.country.trim(),
             customerType = form.customerType ?: "", marketExposure = form.marketExposure ?: "",
             products = form.products.joinToString("; "),
             otherDetail = form.otherDetail, cardPhotoPath = if (photoTaken) photoFile?.absolutePath else null,
+            cardBackPhotoPath = if (photoTaken && backTaken) backFile?.absolutePath else null,
             createdAt = at,
             attendedByKey = e?.key.orEmpty(), attendedByName = e?.name.orEmpty(), attendedByTitle = e?.title.orEmpty(),
             attendedByEmail = e?.email.orEmpty(), attendedByPhone = e?.phone.orEmpty(),
@@ -273,7 +293,7 @@ fun App() {
             discussionNotes = form.notes.trim(), remarks = form.remark.orEmpty(),
             remarksOther = if (form.remark == "Others") form.remarkOther.trim() else "",
             factoryVisitAt = factoryAt, followUpAt = followAt,
-            thankYouStatus = ThankYou.initialStatus(form.email)).let {
+            thankYouStatus = ThankYou.initialStatus(mainEmail)).let {
                 it.copy(factoryReminderStatus = Reminder.initialStatus(factoryAt, it),
                     followUpReminderStatus = Reminder.initialStatus(followAt, it))
             }
@@ -346,7 +366,7 @@ fun App() {
     fun startVisit(manual: Boolean) {
         visitStart = System.currentTimeMillis()
         if (form.country.isBlank()) form = form.copy(country = appSettings.defaultCountry.trim())
-        if (manual) { photoFile = null; photoTaken = false; ocrError = false; fieldHints = emptyMap(); screen = Screen.Details }
+        if (manual) { dropPhotos(); screen = Screen.Details }
         else screen = Screen.Capture
     }
     // Back from Details returns to the camera, unless the visit started with manual entry ("Skip card scan").
@@ -416,7 +436,7 @@ fun App() {
                         db.dao().update(v)
                         if (auto) ThankYouWorker.enqueue(ctx)
                         Reminders.schedule(ctx, v)   // re-arms a changed factory visit / follow-up time, disarms a removed one
-                        if (resend) snackbar.showSnackbar(if (auto) "Saved. Updated mail will be sent to ${v.email.trim()}"
+                        if (resend) snackbar.showSnackbar(if (auto) "Saved. Updated mail will be sent to ${v.mailableEmails().joinToString(", ")}"
                             else "Saved. Updated mail is waiting in Mail settings")
                     }
                 },
@@ -428,7 +448,7 @@ fun App() {
                         val r = snackbar.showSnackbar("${v.name.ifBlank { "Visitor" }} deleted", actionLabel = "Undo",
                             duration = SnackbarDuration.Long)
                         if (r == SnackbarResult.ActionPerformed) db.dao().insert(v)
-                        else withContext(Dispatchers.IO) { v.cardPhotoPath?.let { File(it).delete() }; Sync.notePhotos(v).forEach { it.delete() } }
+                        else withContext(Dispatchers.IO) { v.cardPhotoPath?.let { File(it).delete() }; v.cardBackPhotoPath?.let { File(it).delete() }; Sync.notePhotos(v).forEach { it.delete() } }
                     }
                 },
                 onClear = { scope.launch { db.dao().clear(); File(ctx.filesDir, "cards").deleteRecursively() } },
@@ -502,8 +522,9 @@ fun App() {
                         }
 
                         Screen.Capture -> Centered {
-                            Text("Photograph the card", style = MaterialTheme.typography.headlineMedium, color = LineC)
-                            Text("Lay it flat, good light, fill the frame.", color = Steel)
+                            Text(if (photoTaken) "Front side captured" else "Photograph the front", style = MaterialTheme.typography.headlineMedium, color = LineC)
+                            Text(if (photoTaken) "Add the back too if it has more details. It's optional."
+                                else "Lay it flat, good light, fill the frame.", color = Steel, textAlign = TextAlign.Center)
                             Box(Modifier.fillMaxWidth().aspectRatio(1.6f).clip(CardShape)
                                 .background(if (IsDark) NavyDeep else androidx.compose.ui.graphics.Color(0xFFE6EBF1))
                                 .viewfinder(Amber), contentAlignment = Alignment.Center) {
@@ -514,13 +535,33 @@ fun App() {
                                     Text("No photo yet", color = Steel)
                                 }
                             }
+                            // Optional back side: only offered once the front is in.
+                            if (photoTaken) Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                                .border(1.dp, Steel.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                                .clickable { openCamera(back = true) }.padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.width(88.dp).aspectRatio(1.6f).clip(RoundedCornerShape(8.dp))
+                                    .background(if (IsDark) NavyDeep else androidx.compose.ui.graphics.Color(0xFFE6EBF1)),
+                                    contentAlignment = Alignment.Center) {
+                                    if (backTaken && backFile != null)
+                                        AsyncImage(backFile, "Back of card", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                    else Icon(Icons.Default.AddAPhoto, null, tint = Steel, modifier = Modifier.size(26.dp))
+                                }
+                                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                    Text(if (backTaken) "Back side added" else "Add back side", color = LineC, fontWeight = FontWeight.SemiBold)
+                                    Text(if (backTaken) "Tap to retake" else "Optional", color = Steel, fontSize = 13.sp)
+                                }
+                                if (backTaken) IconButton({ backFile?.delete(); backFile = null; backTaken = false }) {
+                                    Icon(Icons.Default.Close, "Remove back side", tint = Steel)
+                                }
+                            }
                             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 SecondaryButton("Back", icon = Icons.AutoMirrored.Filled.ArrowBack) { screen = Screen.Welcome }
-                                if (photoTaken) PrimaryButton("Use photo", icon = Icons.Default.Check) { photoFile?.let { runOcr(it) } }
+                                if (photoTaken) PrimaryButton(if (backTaken) "Use photos" else "Use photo", icon = Icons.Default.Check) { photoFile?.let { runOcr(it) } }
                                 else PrimaryButton("Open camera", icon = Icons.Default.CameraAlt) { openCamera() }
                             }
-                            if (photoTaken) LinkButton("Retake") { openCamera() }
-                            LinkButton("Skip scan, enter details manually") { photoFile = null; photoTaken = false; ocrError = false; fieldHints = emptyMap(); screen = Screen.Details }
+                            if (photoTaken) LinkButton("Retake front") { openCamera() }
+                            LinkButton("Skip scan, enter details manually") { dropPhotos(); screen = Screen.Details }
                         }
 
                         Screen.Processing -> Centered {
@@ -531,7 +572,7 @@ fun App() {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(Modifier.size(20.dp), color = Amber, strokeWidth = 2.5.dp)
                                 Spacer(Modifier.width(12.dp))
-                                Text("Reading the card…", style = MaterialTheme.typography.titleMedium, color = LineC)
+                                Text(if (backTaken) "Reading both sides…" else "Reading the card…", style = MaterialTheme.typography.titleMedium, color = LineC)
                             }
                             Text("Name, company, phone and e-mail are picked up automatically.", color = Steel, textAlign = TextAlign.Center)
                         }
@@ -546,8 +587,13 @@ fun App() {
                                 }
                                 if (photoTaken && photoFile != null) {
                                     Spacer(Modifier.width(12.dp))
-                                    AsyncImage(photoFile, "Scanned card", Modifier.width(96.dp).aspectRatio(1.6f).clip(RoundedCornerShape(10.dp))
-                                        .border(1.5.dp, Amber.copy(alpha = 0.6f), RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        AsyncImage(photoFile, "Scanned card, front", Modifier.width(96.dp).aspectRatio(1.6f).clip(RoundedCornerShape(10.dp))
+                                            .border(1.5.dp, Amber.copy(alpha = 0.6f), RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
+                                        if (backTaken && backFile != null)
+                                            AsyncImage(backFile, "Scanned card, back", Modifier.width(96.dp).aspectRatio(1.6f).clip(RoundedCornerShape(10.dp))
+                                                .border(1.5.dp, Amber.copy(alpha = 0.6f), RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
+                                    }
                                 }
                             }
                             if (ocrError) Notice(Icons.Default.ErrorOutline, "Couldn't auto-read the card. Fields are blank, just fill them in.", Danger, Color_F0C3B8)
@@ -562,6 +608,24 @@ fun App() {
                                 PaperField("Company", form.company, Icons.Default.Apartment, hint = fieldHints["company"], caps = KeyboardCapitalization.Words) { form = form.copy(company = it); fieldHints = fieldHints - "company" }
                                 PaperField("Phone", form.phone, Icons.Default.Phone, hint = fieldHints["phone"], keyboard = KeyboardType.Phone) { form = form.copy(phone = it); fieldHints = fieldHints - "phone" }
                                 PaperField("E-mail", form.email, Icons.Default.Email, hint = fieldHints["email"], keyboard = KeyboardType.Email) { form = form.copy(email = it); fieldHints = fieldHints - "email" }
+                                // Extra addresses: filled when the card shows more than one, or added by hand (max MAX_EMAILS in all).
+                                form.extraEmails.forEachIndexed { i, mail ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        PaperField(EXTRA_EMAIL_LABELS[i], mail, Icons.Default.AlternateEmail, Modifier.weight(1f), keyboard = KeyboardType.Email) { v ->
+                                            form = form.copy(extraEmails = form.extraEmails.toMutableList().also { it[i] = v })
+                                        }
+                                        IconButton({ form = form.copy(extraEmails = form.extraEmails.filterIndexed { j, _ -> j != i }) }) {
+                                            Icon(Icons.Default.Close, "Remove ${EXTRA_EMAIL_LABELS[i].lowercase()}", tint = Steel)
+                                        }
+                                    }
+                                }
+                                if (form.extraEmails.size < MAX_EMAILS - 1)
+                                    LinkButton(if (form.extraEmails.isEmpty()) "+ Add secondary e-mail" else "+ Add another e-mail") {
+                                        form = form.copy(extraEmails = form.extraEmails + "")
+                                    }
+                                PaperField("Website", form.website, Icons.Default.Language, hint = fieldHints["website"], keyboard = KeyboardType.Uri) {
+                                    form = form.copy(website = it); fieldHints = fieldHints - "website"
+                                }
                             }
                             FormSection("Location", Icons.Default.Place) {
                                 PaperField("Address", form.address, Icons.Default.Home, singleLine = false, hint = fieldHints["address"], caps = KeyboardCapitalization.Words) { form = form.copy(address = it); fieldHints = fieldHints - "address" }

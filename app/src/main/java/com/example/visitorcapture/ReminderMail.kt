@@ -58,10 +58,11 @@ object ReminderMail {
      * still gets it (TO). Null when there is nobody valid to mail.
      */
     fun recipients(v: Visitor): Pair<String, String?>? {
-        val visitor = v.email.trim().takeIf { ThankYou.isValidEmail(it) }
+        val visitors = v.mailableEmails()
+        val visitor = visitors.joinToString(", ").ifEmpty { null }   // all of the visitor's addresses
         val staff = v.attendedByEmail.trim().takeIf { ThankYou.isValidEmail(it) }
         return when {
-            visitor != null -> visitor to staff?.takeIf { !it.equals(visitor, ignoreCase = true) }
+            visitor != null -> visitor to staff?.takeIf { s -> visitors.none { it.equals(s, ignoreCase = true) } }
             staff != null -> staff to null
             else -> null
         }

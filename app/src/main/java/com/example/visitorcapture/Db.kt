@@ -48,8 +48,29 @@ data class Visitor(
     val factoryVisitAt: Long = 0,
     // 24-hour reminder mails, separate from the thank-you mail: "" (none) | SCHEDULED | SENT | FAILED (see Reminder)
     val factoryReminderStatus: String = "",
-    val followUpReminderStatus: String = ""
+    val followUpReminderStatus: String = "",
+    // optional photo of the back of the business card (the front is cardPhotoPath)
+    val cardBackPhotoPath: String? = null,
+    // secondary / third e-mail addresses joined with "; " (the main one is [email]); mails go to all of them
+    val extraEmails: String = "",
+    val website: String = ""             // company website from the card, e.g. www.example.com
 )
+
+/** The extra addresses as a list (see [Visitor.extraEmails]). */
+fun Visitor.extraEmailList(): List<String> = extraEmails.split(";").map { it.trim() }.filter { it.isNotEmpty() }
+
+/** Every address the visitor can be mailed at, main one first; invalid ones and repeats are left out. */
+fun Visitor.mailableEmails(): List<String> =
+    (listOf(email.trim()) + extraEmailList()).filter { ThankYou.isValidEmail(it) }.distinctBy { it.lowercase() }
+
+/**
+ * Tidies the e-mail fields of a form before saving: blanks and repeats are dropped and the first remaining address
+ * becomes the main one. Returns (main e-mail, extras joined with "; ").
+ */
+fun splitEmails(main: String, extras: List<String>): Pair<String, String> {
+    val all = (listOf(main) + extras).map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() }.take(MAX_EMAILS)
+    return all.firstOrNull().orEmpty() to all.drop(1).joinToString("; ")
+}
 
 /** Staff who have logged in on this phone by scanning their vCard QR code. */
 @Entity(tableName = "employees", indices = [Index(value = ["empKey"], unique = true)])
@@ -193,7 +214,28 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
     }
 }
 
-@Database(entities = [Visitor::class, Employee::class], version = 8, exportSchema = false)
+/** v8 -> v9: optional photo of the back of the business card. Existing rows have none. */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `cardBackPhotoPath` TEXT")
+    }
+}
+
+/** v9 -> v10: secondary / third e-mail addresses. Existing rows have none. */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `extraEmails` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+/** v10 -> v11: company website. Existing rows have none. */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `website` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+@Database(entities = [Visitor::class, Employee::class], version = 11, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): VisitorDao
     abstract fun employeeDao(): EmployeeDao
@@ -201,7 +243,7 @@ abstract class AppDb : RoomDatabase() {
         @Volatile private var inst: AppDb? = null
         fun get(c: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(c.applicationContext, AppDb::class.java, "visitors.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
                 .build().also { inst = it }
         }
     }

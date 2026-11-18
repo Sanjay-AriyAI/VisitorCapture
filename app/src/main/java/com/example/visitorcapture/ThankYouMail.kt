@@ -75,7 +75,7 @@ object ThankYou {
      */
     fun needsUpdateMail(old: Visitor, edited: Visitor) =
         old.thankYouStatus == SENT && isValidEmail(edited.email) &&
-            (htmlBody(old, "") != htmlBody(edited, "") || old.email.trim() != edited.email.trim())
+            (htmlBody(old, "") != htmlBody(edited, "") || old.mailableEmails() != edited.mailableEmails())
 
     /** One sentence on what happens next, from the follow-up and purpose of visit; "" if nothing was planned. */
     fun nextStep(v: Visitor): String {
@@ -211,7 +211,7 @@ object ThankYou {
 
         val contact = details(listOf(
             "Name" to name, "Designation" to v.title, "Company" to v.company,
-            "Phone" to v.phone, "E-mail" to v.email, "Address" to v.address,
+            "Phone" to v.phone, "E-mail" to (listOf(v.email) + v.extraEmailList()).filter { it.isNotBlank() }.joinToString(", "), "Website" to v.website, "Address" to v.address,
             "State" to v.state, "Country" to v.country))
         val profile = details(listOf("Customer type" to v.customerType, "Market" to v.marketExposure))
         val products = productsHtml(v)
@@ -347,7 +347,7 @@ object ThankYou {
         val company = c.fromName.ifBlank { "our company" }
         val msg = MimeMessage(session(c)).apply {
             setFrom(fromAddress(c, company))
-            setRecipients(Message.RecipientType.TO, InternetAddress.parse(v.email.trim(), true))
+            setRecipients(Message.RecipientType.TO, InternetAddress.parse(v.mailableEmails().ifEmpty { listOf(v.email.trim()) }.joinToString(","), true))
             if (isValidEmail(v.attendedByEmail)) replyTo = arrayOf(InternetAddress(v.attendedByEmail.trim(), v.attendedByName.ifBlank { null }, "UTF-8"))
             setSubject(subject(company, updated), "UTF-8")
             setContent(content(body(v, company, updated), htmlBody(v, company, if (logo != null) LOGO_CID else null, updated), logo))

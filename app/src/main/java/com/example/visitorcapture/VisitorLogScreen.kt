@@ -70,7 +70,7 @@ fun VisitorLogScreen(
         val q = query.trim().lowercase()
         visitors.filter { v ->
             filter.matches(v, today) && (q.isEmpty() ||
-                listOf(v.name, v.company, v.email, v.phone, v.title).any { it.lowercase().contains(q) })
+                listOf(v.name, v.company, v.email, v.extraEmails, v.phone, v.title).any { it.lowercase().contains(q) })
         }
     }
 
@@ -207,7 +207,8 @@ private fun VisitorCard(v: Visitor, fmt: SimpleDateFormat, expanded: Boolean, on
         AnimatedVisibility(expanded, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
             Column(Modifier.padding(top = 12.dp, end = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 HorizontalDivider(color = LineC.copy(alpha = 0.08f))
-                Detail("Contact", listOf(v.email, v.phone).filter { it.isNotBlank() }.joinToString(" · "))
+                Detail("Contact", (listOf(v.email) + v.extraEmailList() + v.phone).filter { it.isNotBlank() }.joinToString(" · "))
+                Detail("Website", v.website)
                 Detail("Address", listOf(v.address, v.state, v.country).filter { it.isNotBlank() }.joinToString(", "))
                 Detail("Products", Catalog.summarize(v.products.split("; ").filter { it.isNotBlank() }))
                 Detail("Other products", v.otherDetail)
@@ -275,6 +276,8 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
     var title by remember { mutableStateOf(v.title) }
     var company by remember { mutableStateOf(v.company) }
     var email by remember { mutableStateOf(v.email) }
+    var extraEmails by remember { mutableStateOf(v.extraEmailList()) }
+    var website by remember { mutableStateOf(v.website) }
     var phone by remember { mutableStateOf(v.phone) }
     var address by remember { mutableStateOf(v.address) }
     var state by remember { mutableStateOf(v.state) }
@@ -299,10 +302,10 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
             options.forEach { o -> OptionChip(o, selected(o)) { pick(o) } }
         }
     fun save() {
-        val mail = email.trim()
+        val (mail, extras) = splitEmails(email, extraEmails)
         val newFactory = if (Reminder.FACTORY.outcome in outcomes) factoryAt else 0L
         val newFollow = if (Reminder.FOLLOW_UP.outcome in outcomes) followAt else 0L
-        val edited = v.copy(name = name.trim(), title = title.trim(), company = company.trim(), email = mail, phone = phone.trim(),
+        val edited = v.copy(name = name.trim(), title = title.trim(), company = company.trim(), email = mail, extraEmails = extras, website = website.trim(), phone = phone.trim(),
             address = address.trim(), state = state.trim(), country = country.trim(),
             customerType = customerType, marketExposure = market, otherDetail = other.trim(),
             additionalInterest = interest.trim(),
@@ -335,6 +338,19 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
                 field("Title", title) { title = it }
                 field("Company", company) { company = it }
                 field("Email", email) { email = it }
+                extraEmails.forEachIndexed { i, mail ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(mail, { v -> extraEmails = extraEmails.toMutableList().also { it[i] = v } },
+                            label = { Text(EXTRA_EMAIL_LABELS[i]) }, singleLine = true, modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp), colors = darkFieldColors(filled = false))
+                        IconButton({ extraEmails = extraEmails.filterIndexed { j, _ -> j != i } }) {
+                            Icon(Icons.Default.Close, "Remove ${EXTRA_EMAIL_LABELS[i].lowercase()}", tint = Steel)
+                        }
+                    }
+                }
+                if (extraEmails.size < MAX_EMAILS - 1)
+                    LinkButton(if (extraEmails.isEmpty()) "+ Add secondary e-mail" else "+ Add another e-mail") { extraEmails = extraEmails + "" }
+                field("Website", website) { website = it }
                 field("Phone", phone) { phone = it }
                 field("Address", address, true) { address = it }
                 field("State", state) { state = it }

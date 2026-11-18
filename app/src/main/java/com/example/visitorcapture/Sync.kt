@@ -19,11 +19,12 @@ object Sync {
         "AttendedBy", "AttendedByTitle", "AttendedByEmail", "AttendedByPhone", "AttendedByKey",
         "LeadOutcome", "DiscussionNotes", "Remarks", "RemarksOther",
         "FollowUpAction", "FollowUpDate", "FollowUpAtMs", "FollowUpNote", "Photo", "HandwrittenNotes",
-        "FactoryVisitDate", "FactoryVisitAtMs", "FactoryReminder", "FollowUpReminder")
+        "FactoryVisitDate", "FactoryVisitAtMs", "FactoryReminder", "FollowUpReminder", "PhotoBack", "ExtraEmails", "Website")
 
     private fun q(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
 
     private fun hasPhoto(v: Visitor) = v.cardPhotoPath?.let { File(it).exists() } == true
+    private fun hasBackPhoto(v: Visitor) = v.cardBackPhotoPath?.let { File(it).exists() } == true
 
     /** File names allowed for handwritten-note images, in the zip and in the cards folder. */
     private val NOTE_NAME = Regex("[A-Za-z0-9_-]{8,100}\\.(jpg|png|webp)")
@@ -41,6 +42,9 @@ object Sync {
 
     /** Zip path of the lead's business-card photo. */
     fun cardEntry(v: Visitor) = "${leadFolder(v)}/business-card.jpg"
+
+    /** Zip path of the (optional) photo of the back of the card. */
+    fun cardBackEntry(v: Visitor) = "${leadFolder(v)}/business-card-back.jpg"
 
     /** Handwritten-note images with their zip paths: leads/<folder>/handwritten-note-N.<ext>. */
     fun noteEntries(v: Visitor): List<Pair<String, File>> = notePhotos(v).mapIndexed { i, f ->
@@ -64,6 +68,7 @@ object Sync {
         }
         section("Visitor", listOf("Lead ID" to v.uid, "Visited at" to at.format(Date(v.createdAt)),
             "Name" to v.name, "Title" to v.title, "Company" to v.company, "Phone" to v.phone, "E-mail" to v.email,
+            "Secondary e-mail" to v.extraEmailList().getOrElse(0) { "" }, "Third e-mail" to v.extraEmailList().getOrElse(1) { "" }, "Website" to v.website,
             "Address" to v.address, "State" to v.state, "Country" to v.country))
         section("Profile & interest", listOf("Customer type" to v.customerType, "Market exposure" to v.marketExposure,
             "Products" to v.products.split(";").map { it.trim() }.filter { it.isNotBlank() }.joinToString("\n"),
@@ -76,6 +81,7 @@ object Sync {
         section("Attended by", listOf("Name" to v.attendedByName, "Title" to v.attendedByTitle,
             "E-mail" to v.attendedByEmail, "Phone" to v.attendedByPhone, "Device" to v.deviceName))
         val files = (if (hasPhoto(v)) listOf("business-card.jpg") else emptyList()) +
+            (if (hasBackPhoto(v)) listOf("business-card-back.jpg") else emptyList()) +
             noteEntries(v).map { it.first.substringAfterLast('/') }
         section("Attachments", listOf("Files" to files.joinToString("\n")))
         return out.toString().replace("\n", "\r\n")
@@ -100,13 +106,14 @@ object Sync {
                 noteEntries(v).joinToString("; ") { it.first },
                 if (v.factoryVisitAt > 0) followFmt.format(Date(v.factoryVisitAt)) else "",
                 if (v.factoryVisitAt > 0) v.factoryVisitAt.toString() else "",
-                v.factoryReminderStatus, v.followUpReminderStatus).joinToString(",") { q(it) }).append("\n")
+                v.factoryReminderStatus, v.followUpReminderStatus,
+                if (hasBackPhoto(v)) cardBackEntry(v) else "", v.extraEmails, v.website).joinToString(",") { q(it) }).append("\n")
         }
         return sb.toString()
     }
 
     /** Zip with visitors.csv (all leads) + leads/<UID - Name - Company>/ holding details.txt,
-     *  business-card.jpg and handwritten-note-N.<ext> for each lead. */
+     *  business-card.jpg, business-card-back.jpg (if taken) and handwritten-note-N.<ext> for each lead. */
     fun exportZip(ctx: Context, list: List<Visitor>, device: String): File {
         val dir = File(ctx.cacheDir, "exports").apply { mkdirs() }
         dir.listFiles()?.forEach { it.delete() }
@@ -121,6 +128,11 @@ object Sync {
                 if (hasPhoto(v)) {
                     z.putNextEntry(ZipEntry(cardEntry(v)))
                     File(v.cardPhotoPath!!).inputStream().use { it.copyTo(z) }
+                    z.closeEntry()
+                }
+                if (hasBackPhoto(v)) {
+                    z.putNextEntry(ZipEntry(cardBackEntry(v)))
+                    File(v.cardBackPhotoPath!!).inputStream().use { it.copyTo(z) }
                     z.closeEntry()
                 }
                 noteEntries(v).forEach { (path, n) ->
@@ -178,6 +190,7 @@ object Sync {
                         val target = when {
                             !uid.matches(uidRx) -> null
                             file == "business-card.jpg" -> File(cards, "$uid.jpg")
+                            file == "business-card-back.jpg" -> File(cards, "${uid}_back.jpg")
                             else -> noteRx.matchEntire(file)?.let { m ->
                                 File(cards, "${uid}_note_imp_${m.groupValues[1]}.${m.groupValues[2]}") }
                         }
@@ -207,15 +220,16 @@ object Sync {
             val uid = g(r, "UID").trim()
             if (!uid.matches(Regex("[A-Za-z0-9-]{8,64}"))) { skipped++; continue }
             val photo = File(cards, "$uid.jpg").takeIf { it.exists() }?.absolutePath
+            val backPhoto = File(cards, "${uid}_back.jpg").takeIf { it.exists() }?.absolutePath
             val notes = g(r, "HandwrittenNotes").split(";").map { it.trim() }.filter { it.isNotEmpty() }
                 .mapNotNull { p -> leadFiles[p] ?: p.substringAfterLast('/').takeIf { it.matches(NOTE_NAME) }?.let { File(cards, it) } }
                 .filter { it.exists() }.joinToString("|") { it.absolutePath }
             val v = Visitor(uid = uid, deviceName = g(r, "Device"), name = g(r, "Name"), title = g(r, "Title"),
-                company = g(r, "Company"), email = g(r, "Email"), phone = g(r, "Phone"),
+                company = g(r, "Company"), email = g(r, "Email"), extraEmails = g(r, "ExtraEmails"), website = g(r, "Website"), phone = g(r, "Phone"),
                 address = g(r, "Address"), state = g(r, "State"), country = g(r, "Country"),
                 customerType = g(r, "CustomerType"), marketExposure = g(r, "MarketExposure"), products = g(r, "Products"), otherDetail = g(r, "OtherDetail"),
                 additionalInterest = g(r, "AdditionalInterest"), notePhotoPaths = notes,
-                cardPhotoPath = photo, createdAt = g(r, "TimestampMs").toLongOrNull() ?: System.currentTimeMillis(),
+                cardPhotoPath = photo, cardBackPhotoPath = backPhoto, createdAt = g(r, "TimestampMs").toLongOrNull() ?: System.currentTimeMillis(),
                 attendedByKey = g(r, "AttendedByKey"), attendedByName = g(r, "AttendedBy"),
                 attendedByTitle = g(r, "AttendedByTitle"), attendedByEmail = g(r, "AttendedByEmail"),
                 attendedByPhone = g(r, "AttendedByPhone"),
