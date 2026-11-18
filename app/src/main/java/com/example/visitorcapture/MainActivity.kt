@@ -63,7 +63,6 @@ val MARKET_EXPOSURE = listOf("Domestic Visitor", "International Visitor")
 val PRODUCTS = listOf("Mechanical Spares", "Electronics Spares", "Retrofits", "Other Products")
 val LEAD_OUTCOMES = listOf("Product Enquiry", "Sample Request", "General Enquiry", "Order", "Factory Visit", "Follow-up")
 val REMARK_OPTIONS = listOf("Call Back", "Factory Visit", "Need Follow-up", "Others")
-val FOLLOW_UP_ACTIONS = listOf("Send Quotation", "Schedule Factory Visit", "Automatic E-mail Reminder", "Remarks")
 const val MAX_NOTE_PHOTOS = 5   // handwritten-enquiry images per visit
 val STEP_LABELS = listOf("Scan", "Details", "Customer", "Products", "Outcome", "Done")
 
@@ -79,11 +78,9 @@ data class Form(
     val products: Set<String> = emptySet(), val otherDetail: String = "",
     val outcomes: Set<String> = emptySet(), val notes: String = "",
     val remark: String? = null, val remarkOther: String = "",
-    val followUpAction: String? = null, val followUpAt: Long = 0L, val followUpNote: String = ""
-) {
-    /** The follow-up section is only shown (and saved) for these outcomes. */
-    val needsFollowUp get() = "Factory Visit" in outcomes || "Follow-up" in outcomes
-}
+    // times picked in the Factory Visit / Follow-up popup (epoch ms, 0 if none); a reminder mail goes 24 hours before
+    val factoryVisitAt: Long = 0L, val followUpAt: Long = 0L
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -259,8 +256,9 @@ fun App() {
         val at = if (visitStart > 0L) visitStart else System.currentTimeMillis()   // date and time of the visit
         loggedAt = at
         val e = employee
-        // Fields of hidden sections are dropped, so a changed mind never leaves stale values behind.
-        val follow = if (form.needsFollowUp) form.followUpAction else null
+        // A time only counts while its tile is ticked, so a changed mind never leaves a stale reminder behind.
+        val factoryAt = if (Reminder.FACTORY.outcome in form.outcomes) form.factoryVisitAt else 0L
+        val followAt = if (Reminder.FOLLOW_UP.outcome in form.outcomes) form.followUpAt else 0L
         val uidPrefix = UidGen.prefix(e?.name.orEmpty(), deviceName, at)
         val v = Visitor(uid = uidPrefix, deviceName = deviceName,
             name = form.name, title = form.title, company = form.company, email = form.email, phone = form.phone,
@@ -274,18 +272,21 @@ fun App() {
             leadOutcomes = LEAD_OUTCOMES.filter { it in form.outcomes }.joinToString("; "),
             discussionNotes = form.notes.trim(), remarks = form.remark.orEmpty(),
             remarksOther = if (form.remark == "Others") form.remarkOther.trim() else "",
-            followUpAction = follow.orEmpty(),
-            followUpAt = if (follow != null && follow != "Remarks") form.followUpAt else 0L,
-            followUpNote = if (follow == "Remarks") form.followUpNote.trim() else "",
-            thankYouStatus = ThankYou.initialStatus(form.email))
+            factoryVisitAt = factoryAt, followUpAt = followAt,
+            thankYouStatus = ThankYou.initialStatus(form.email)).let {
+                it.copy(factoryReminderStatus = Reminder.initialStatus(factoryAt, it),
+                    followUpReminderStatus = Reminder.initialStatus(followAt, it))
+            }
         // "Send automatically" (Settings) queues the mail straight away; otherwise it waits (PENDING) for the Mail settings button.
         val autoSend = appSettings.autoThankYou && v.thankYouStatus == ThankYou.PENDING && SmtpSettings.load(ctx).complete
         extraNote = ""; extraSaved = ""
         scope.launch {
             val uid = UidGen.withSeq(uidPrefix, db.dao().countUidPrefix(uidPrefix))
             lastUid = uid
-            db.dao().insert(v.copy(uid = uid, thankYouStatus = if (autoSend) ThankYou.QUEUED else v.thankYouStatus))
+            val saved = v.copy(uid = uid, thankYouStatus = if (autoSend) ThankYou.QUEUED else v.thankYouStatus)
+            db.dao().insert(saved)
             if (autoSend) ThankYouWorker.enqueue(ctx)
+            Reminders.schedule(ctx, saved)   // 24-hour reminder mails, sent in the background even if the app is closed
         }
     }
 
@@ -414,6 +415,7 @@ fun App() {
                     scope.launch {
                         db.dao().update(v)
                         if (auto) ThankYouWorker.enqueue(ctx)
+                        Reminders.schedule(ctx, v)   // re-arms a changed factory visit / follow-up time, disarms a removed one
                         if (resend) snackbar.showSnackbar(if (auto) "Saved. Updated mail will be sent to ${v.email.trim()}"
                             else "Saved. Updated mail is waiting in Mail settings")
                     }

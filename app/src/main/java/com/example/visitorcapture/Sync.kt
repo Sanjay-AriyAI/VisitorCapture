@@ -18,7 +18,8 @@ object Sync {
         "CustomerType", "MarketExposure", "Products", "OtherDetail", "AdditionalInterest",
         "AttendedBy", "AttendedByTitle", "AttendedByEmail", "AttendedByPhone", "AttendedByKey",
         "LeadOutcome", "DiscussionNotes", "Remarks", "RemarksOther",
-        "FollowUpAction", "FollowUpDate", "FollowUpAtMs", "FollowUpNote", "Photo", "HandwrittenNotes")
+        "FollowUpAction", "FollowUpDate", "FollowUpAtMs", "FollowUpNote", "Photo", "HandwrittenNotes",
+        "FactoryVisitDate", "FactoryVisitAtMs", "FactoryReminder", "FollowUpReminder")
 
     private fun q(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
 
@@ -69,7 +70,9 @@ object Sync {
             "Other details" to v.otherDetail, "Additional interest" to v.additionalInterest))
         section("Outcome & follow-up", listOf("Lead outcome" to v.leadOutcomes, "Discussion notes" to v.discussionNotes,
             "Remarks" to v.remarks, "Remarks (other)" to v.remarksOther, "Follow-up action" to v.followUpAction,
-            "Follow-up date" to (if (v.followUpAt > 0) at.format(Date(v.followUpAt)) else ""), "Follow-up note" to v.followUpNote))
+            "Follow-up date" to (if (v.followUpAt > 0) at.format(Date(v.followUpAt)) else ""), "Follow-up note" to v.followUpNote,
+            "Factory visit" to (if (v.factoryVisitAt > 0) at.format(Date(v.factoryVisitAt)) else ""),
+            "Factory visit reminder" to v.factoryReminderStatus, "Follow-up reminder" to v.followUpReminderStatus))
         section("Attended by", listOf("Name" to v.attendedByName, "Title" to v.attendedByTitle,
             "E-mail" to v.attendedByEmail, "Phone" to v.attendedByPhone, "Device" to v.deviceName))
         val files = (if (hasPhoto(v)) listOf("business-card.jpg") else emptyList()) +
@@ -94,7 +97,10 @@ object Sync {
                 if (v.followUpAt > 0) followFmt.format(Date(v.followUpAt)) else "",
                 if (v.followUpAt > 0) v.followUpAt.toString() else "", v.followUpNote,
                 if (hasPhoto(v)) cardEntry(v) else "",
-                noteEntries(v).joinToString("; ") { it.first }).joinToString(",") { q(it) }).append("\n")
+                noteEntries(v).joinToString("; ") { it.first },
+                if (v.factoryVisitAt > 0) followFmt.format(Date(v.factoryVisitAt)) else "",
+                if (v.factoryVisitAt > 0) v.factoryVisitAt.toString() else "",
+                v.factoryReminderStatus, v.followUpReminderStatus).joinToString(",") { q(it) }).append("\n")
         }
         return sb.toString()
     }
@@ -216,7 +222,9 @@ object Sync {
                 leadOutcomes = g(r, "LeadOutcome"), discussionNotes = g(r, "DiscussionNotes"),
                 remarks = g(r, "Remarks"), remarksOther = g(r, "RemarksOther"),
                 followUpAction = g(r, "FollowUpAction"), followUpAt = g(r, "FollowUpAtMs").toLongOrNull() ?: 0L,
-                followUpNote = g(r, "FollowUpNote"))
+                followUpNote = g(r, "FollowUpNote"),
+                // reminder statuses are not imported: the phone that captured the visit sends its reminders
+                factoryVisitAt = g(r, "FactoryVisitAtMs").toLongOrNull() ?: 0L)
             if (dao.insert(v) == -1L) skipped++ else added++
         }
         return added to skipped

@@ -42,8 +42,13 @@ data class Visitor(
     val followUpAt: Long = 0,           // follow-up date and time (epoch ms), 0 if none
     val followUpNote: String = "",      // free text when followUpAction is "Remarks"
     val thankYouStatus: String = "",    // "" (no valid e-mail / imported) | PENDING | SENT | FAILED
-    val thankYouSentAt: Long = 0        // epoch ms the last thank-you mail was accepted by the SMTP server, 0 if never;
+    val thankYouSentAt: Long = 0,       // epoch ms the last thank-you mail was accepted by the SMTP server, 0 if never;
                                         // > 0 on a re-queued record means the next mail is the "updated, final version" one
+    // scheduled factory visit (epoch ms, 0 if none); the Follow-up time lives in followUpAt
+    val factoryVisitAt: Long = 0,
+    // 24-hour reminder mails, separate from the thank-you mail: "" (none) | SCHEDULED | SENT | FAILED (see Reminder)
+    val factoryReminderStatus: String = "",
+    val followUpReminderStatus: String = ""
 )
 
 /** Staff who have logged in on this phone by scanning their vCard QR code. */
@@ -77,6 +82,11 @@ interface VisitorDao {
     /** Changes only the status. thankYouSentAt is kept, so a record that was mailed before still sends the "updated" version. */
     @Query("UPDATE visitors SET thankYouStatus = :status WHERE uid = :uid")
     suspend fun setThankYouStatus(uid: String, status: String)
+    @Query("SELECT * FROM visitors WHERE factoryReminderStatus = 'SCHEDULED' OR followUpReminderStatus = 'SCHEDULED'")
+    suspend fun scheduledReminders(): List<Visitor>
+    @Query("UPDATE visitors SET factoryReminderStatus = :status WHERE uid = :uid") suspend fun setFactoryReminder(uid: String, status: String)
+    @Query("UPDATE visitors SET followUpReminderStatus = :status WHERE uid = :uid") suspend fun setFollowUpReminder(uid: String, status: String)
+    @Query("SELECT * FROM visitors WHERE uid = :uid") suspend fun byUid(uid: String): Visitor?
     @Query("SELECT * FROM visitors ORDER BY createdAt DESC") fun all(): Flow<List<Visitor>>
     @Query("SELECT COUNT(*) FROM visitors WHERE uid LIKE :prefix || '%'") suspend fun countUidPrefix(prefix: String): Int
     /** Profile edited: visits this staff member attended on this phone follow the corrected details. */
@@ -174,7 +184,16 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
-@Database(entities = [Visitor::class, Employee::class], version = 7, exportSchema = false)
+/** v7 -> v8: factory visit time and the two 24-hour reminder mail statuses. Existing rows stay blank: nothing is mailed retroactively. */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `factoryVisitAt` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `factoryReminderStatus` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `followUpReminderStatus` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+@Database(entities = [Visitor::class, Employee::class], version = 8, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): VisitorDao
     abstract fun employeeDao(): EmployeeDao
@@ -182,7 +201,7 @@ abstract class AppDb : RoomDatabase() {
         @Volatile private var inst: AppDb? = null
         fun get(c: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(c.applicationContext, AppDb::class.java, "visitors.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                 .build().also { inst = it }
         }
     }

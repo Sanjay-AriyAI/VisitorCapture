@@ -80,6 +80,12 @@ object ThankYou {
     /** One sentence on what happens next, from the follow-up and purpose of visit; "" if nothing was planned. */
     fun nextStep(v: Visitor): String {
         val fmt = SimpleDateFormat("EEEE, d MMMM yyyy 'at' HH:mm", Locale.getDefault())
+        // New records: the times picked in the Factory Visit / Follow-up popup
+        val planned = listOfNotNull(
+            if (v.factoryVisitAt > 0) "We look forward to welcoming you at our factory on ${fmt.format(Date(v.factoryVisitAt))}." else null,
+            if (v.followUpAt > 0 && v.followUpAction.isBlank()) "We will follow up with you on ${fmt.format(Date(v.followUpAt))}." else null)
+        if (planned.isNotEmpty()) return planned.joinToString(" ")
+        // Older records: the follow-up action chosen in the former FOLLOW-UP section
         return when (v.followUpAction) {
             "Send Quotation" -> "We will send you the quotation shortly" +
                 (if (v.followUpAt > 0) ", by ${SimpleDateFormat("d MMMM yyyy", Locale.getDefault()).format(Date(v.followUpAt))}." else ".")
@@ -133,27 +139,27 @@ object ThankYou {
     // ------------------------------------------------------------------ HTML mail
 
     // Brand colours, matching the app theme. Mail clients ignore <style> blocks and CSS variables, so everything is inline.
-    private const val NAVY = "#0B2033"
-    private const val AMBER = "#E8A33D"
-    private const val AMBER_DARK = "#A35F00"
-    private const val MUTED = "#5B6B7B"
-    private const val PAGE = "#F3F5F8"
-    private const val RULE = "#E6EBF1"
-    private const val FONT = "'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+    internal const val NAVY = "#0B2033"
+    internal const val AMBER = "#E8A33D"
+    internal const val AMBER_DARK = "#A35F00"
+    internal const val MUTED = "#5B6B7B"
+    internal const val PAGE = "#F3F5F8"
+    internal const val RULE = "#E6EBF1"
+    internal const val FONT = "'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 
-    private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    internal fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         .replace("\"", "&quot;").replace("'", "&#39;")
-    private fun escLines(s: String) = esc(s.trim()).replace(Regex("\r?\n"), "<br>")
+    internal fun escLines(s: String) = esc(s.trim()).replace(Regex("\r?\n"), "<br>")
 
     /** A titled block with an amber rule under the heading. */
-    private fun section(title: String, inner: String) = """
+    internal fun section(title: String, inner: String) = """
         <tr><td style="padding:24px 32px 0 32px;">
           <div style="font-family:$FONT;font-size:11px;letter-spacing:1.6px;font-weight:700;color:$AMBER_DARK;text-transform:uppercase;padding-bottom:8px;border-bottom:2px solid $AMBER;">${esc(title)}</div>
           $inner
         </td></tr>"""
 
     /** Label / value table; blank values are left out, and an all-blank table renders nothing. */
-    private fun details(rows: List<Pair<String, String>>): String {
+    internal fun details(rows: List<Pair<String, String>>): String {
         val body = rows.filter { it.second.isNotBlank() }.joinToString("") { (k, v) ->
             """<tr>
               <td style="font-family:$FONT;padding:9px 12px 9px 0;width:36%;color:$MUTED;font-size:13px;vertical-align:top;border-bottom:1px solid $RULE;">${esc(k)}</td>
@@ -163,12 +169,12 @@ object ThankYou {
         return if (body.isEmpty()) "" else """<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">$body</table>"""
     }
 
-    private fun chips(items: List<String>) = items.joinToString("") {
+    internal fun chips(items: List<String>) = items.joinToString("") {
         """<span style="display:inline-block;font-family:$FONT;background:#FFF3E0;color:#7A4600;border:1px solid #F3D19C;border-radius:14px;padding:5px 12px;margin:10px 6px 0 0;font-size:13px;font-weight:600;">${esc(it)}</span>"""
     }
 
     /** Products grouped as Product → machine → makes / models, from the stored "A > B > C" catalogue paths. */
-    private fun productsHtml(v: Visitor): String {
+    internal fun productsHtml(v: Visitor): String {
         val paths = v.products.split("; ").map { it.trim() }.filter { it.isNotBlank() }.map { it.split(" > ") }
         return paths.groupBy { it[0] }.entries.joinToString("") { (product, list) ->
             val machines = list.filter { it.size > 1 }.groupBy { it[1] }.entries.joinToString("") { (machine, x) ->
@@ -290,7 +296,7 @@ object ThankYou {
         return sb.toString()
     }
 
-    private fun session(c: SmtpSettings): Session {
+    internal fun session(c: SmtpSettings): Session {
         val props = Properties().apply {
             put("mail.smtp.host", c.host.trim())
             put("mail.smtp.port", c.port.toString())
@@ -306,13 +312,13 @@ object ThankYou {
         })
     }
 
-    private fun fromAddress(c: SmtpSettings, name: String) = InternetAddress(c.from.ifBlank { c.user }.trim(), name, "UTF-8")
+    internal fun fromAddress(c: SmtpSettings, name: String) = InternetAddress(c.from.ifBlank { c.user }.trim(), name, "UTF-8")
 
     /**
      * multipart/alternative: plain text first (fallback), then the HTML version.
      * With a [logo] (PNG bytes) the HTML part becomes multipart/related so the logo travels inline, not as an attachment.
      */
-    private fun content(plain: String, html: String, logo: ByteArray?): MimeMultipart {
+    internal fun content(plain: String, html: String, logo: ByteArray?): MimeMultipart {
         val alt = MimeMultipart("alternative")
         alt.addBodyPart(MimeBodyPart().apply { setText(plain, "UTF-8") })
         val htmlPart = MimeBodyPart().apply { setContent(html, "text/html; charset=UTF-8") }

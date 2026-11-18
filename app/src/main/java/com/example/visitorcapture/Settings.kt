@@ -351,7 +351,7 @@ fun MailSettingsScreen(visitors: List<Visitor>, onBack: () -> Unit, onSaved: (me
             verticalAlignment = Alignment.CenterVertically) {
             SecondaryButton("Save", Modifier.weight(1f)) {
                 if (busy) return@SecondaryButton
-                val c = current(); SmtpSettings.save(ctx, c); configured = c.complete
+                val c = current(); SmtpSettings.save(ctx, c); configured = c.complete; Reminders.runNow(ctx)
                 // saved: close Mail settings and go home; the message is shown there
                 onSaved(if (c.complete) "Mail settings saved" else "Saved. Server, username and password are all needed to send mails.", false)
             }
@@ -368,7 +368,7 @@ fun MailSettingsScreen(visitors: List<Visitor>, onBack: () -> Unit, onSaved: (me
                     val err = withContext(Dispatchers.IO) { try { ThankYou.sendTest(c); null } catch (e: Exception) { e.message ?: e.javaClass.simpleName } }
                     busy = false
                     // only a successful test closes the page; a failure stays here with the error
-                    if (err == null) { SmtpSettings.save(ctx, c); configured = true; status = null; onSaved("A test mail was sent to ${c.from.ifBlank { c.user }}. Thank-you mails will be sent from this account.", true) }
+                    if (err == null) { SmtpSettings.save(ctx, c); configured = true; Reminders.runNow(ctx); status = null; onSaved("A test mail was sent to ${c.from.ifBlank { c.user }}. Thank-you mails will be sent from this account.", true) }
                     else status = "Could not send: $err" to true
                 }
             }

@@ -221,8 +221,11 @@ private fun VisitorCard(v: Visitor, fmt: SimpleDateFormat, expanded: Boolean, on
                 }
                 Detail("Outcome", v.leadOutcomes.replace("; ", " · "))
                 Detail("Remarks", if (v.remarks == "Others" && v.remarksOther.isNotBlank()) "Others: ${v.remarksOther}" else v.remarks)
-                Detail("Follow-up", listOf(v.followUpAction, if (v.followUpAt > 0) fmt.format(Date(v.followUpAt)) else "", v.followUpNote)
-                    .filter { it.isNotBlank() }.joinToString(" · "))
+                if (v.factoryVisitAt > 0) Detail("Factory visit", fmt.format(Date(v.factoryVisitAt)) + reminderText(v.factoryReminderStatus))
+                if (v.followUpAction.isNotBlank() || v.followUpNote.isNotBlank())   // older records
+                    Detail("Follow-up", listOf(v.followUpAction, if (v.followUpAt > 0) fmt.format(Date(v.followUpAt)) else "", v.followUpNote)
+                        .filter { it.isNotBlank() }.joinToString(" · "))
+                else if (v.followUpAt > 0) Detail("Follow-up", fmt.format(Date(v.followUpAt)) + reminderText(v.followUpReminderStatus))
                 Detail("Discussion notes", v.discussionNotes)
                 when (v.thankYouStatus) {
                     ThankYou.SENT -> Detail("Thank-you mail", "Sent " + fmt.format(Date(v.thankYouSentAt)))
@@ -244,6 +247,15 @@ private fun VisitorCard(v: Visitor, fmt: SimpleDateFormat, expanded: Boolean, on
             Icon(if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, null, tint = AmberText, modifier = Modifier.size(18.dp))
         }
     }
+}
+
+/** Reminder mail status after the scheduled time, e.g. " · reminder sent". */
+private fun reminderText(status: String) = when (status) {
+    Reminder.SCHEDULED -> " · reminder mail scheduled (24 h before)"
+    Reminder.SENT -> " · reminder mail sent"
+    Reminder.FAILED -> " · reminder mail failed"
+    Reminder.EXPIRED -> " · reminder not sent (time passed)"
+    else -> ""
 }
 
 @Composable
@@ -276,6 +288,9 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
     var remark by remember { mutableStateOf(v.remarks) }
     var remarkOther by remember { mutableStateOf(v.remarksOther) }
     var followNote by remember { mutableStateOf(v.followUpNote) }
+    var factoryAt by remember { mutableStateOf(v.factoryVisitAt) }
+    var followAt by remember { mutableStateOf(v.followUpAt) }
+    var scheduling by remember { mutableStateOf<Reminder?>(null) }
     @Composable fun field(label: String, value: String, multi: Boolean = false, set: (String) -> Unit) =
         OutlinedTextField(value, set, label = { Text(label) }, singleLine = !multi, minLines = if (multi) 2 else 1,
             modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), colors = darkFieldColors(filled = false))
@@ -285,7 +300,9 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
         }
     fun save() {
         val mail = email.trim()
-        onSave(v.copy(name = name.trim(), title = title.trim(), company = company.trim(), email = mail, phone = phone.trim(),
+        val newFactory = if (Reminder.FACTORY.outcome in outcomes) factoryAt else 0L
+        val newFollow = if (Reminder.FOLLOW_UP.outcome in outcomes) followAt else 0L
+        val edited = v.copy(name = name.trim(), title = title.trim(), company = company.trim(), email = mail, phone = phone.trim(),
             address = address.trim(), state = state.trim(), country = country.trim(),
             customerType = customerType, marketExposure = market, otherDetail = other.trim(),
             additionalInterest = interest.trim(),
@@ -294,7 +311,23 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
             remarksOther = if (remark == "Others") remarkOther.trim() else "",
             followUpNote = if (v.followUpAction == "Remarks") followNote.trim() else v.followUpNote,
             // a corrected e-mail on a record that had none becomes mailable
-            thankYouStatus = if (v.thankYouStatus == "" && ThankYou.isValidEmail(mail)) ThankYou.PENDING else v.thankYouStatus))
+            thankYouStatus = if (v.thankYouStatus == "" && ThankYou.isValidEmail(mail)) ThankYou.PENDING else v.thankYouStatus,
+            factoryVisitAt = newFactory, followUpAt = newFollow)
+        // A new time re-schedules its reminder; an unchanged one keeps its status, unless a fixed e-mail makes an unsent one mailable.
+        fun status(old: Long, new: Long, s: String) =
+            if (old != new || (s != Reminder.SENT && s != Reminder.SCHEDULED && mail != v.email.trim())) Reminder.initialStatus(new, edited) else s
+        onSave(edited.copy(factoryReminderStatus = status(v.factoryVisitAt, newFactory, v.factoryReminderStatus),
+            followUpReminderStatus = status(v.followUpAt, newFollow, v.followUpReminderStatus)))
+    }
+    scheduling?.let { kind ->
+        val ticked = kind.outcome in outcomes
+        ScheduleDialog(kind, if (!ticked) 0L else if (kind == Reminder.FACTORY) factoryAt else followAt,
+            onSave = { at ->
+                if (kind == Reminder.FACTORY) factoryAt = at else followAt = at
+                outcomes = outcomes + kind.outcome; scheduling = null
+            },
+            onRemove = if (ticked) ({ outcomes = outcomes - kind.outcome; scheduling = null }) else null,
+            onDismiss = { scheduling = null })
     }
     FormSheet("Edit visitor", onDismiss, onSave = { save() }, icon = Icons.Default.Edit) {
                 Text("ID: ${v.uid}", fontSize = 12.sp, color = Steel)
@@ -313,7 +346,13 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
                 field("Other product detail", other, true) { other = it }
                 field("Also interested in", interest, true) { interest = it }
                 Text("Lead outcome", fontSize = 12.sp, color = Steel)
-                chips(LEAD_OUTCOMES, { it in outcomes }) { outcomes = if (it in outcomes) outcomes - it else outcomes + it }
+                chips(LEAD_OUTCOMES, { it in outcomes }) { o ->
+                    val kind = Reminder.values().find { it.outcome == o }
+                    if (kind != null) scheduling = kind   // Factory Visit / Follow-up: pick the date and time first
+                    else outcomes = if (o in outcomes) outcomes - o else outcomes + o
+                }
+                if (Reminder.FACTORY.outcome in outcomes) scheduleBadge(factoryAt)?.let { Text("Factory visit: $it", fontSize = 12.sp, color = Steel) }
+                if (Reminder.FOLLOW_UP.outcome in outcomes) scheduleBadge(followAt)?.let { Text("Follow-up: $it", fontSize = 12.sp, color = Steel) }
                 field("Discussion notes", notes, true) { notes = it }
                 Text("Remarks", fontSize = 12.sp, color = Steel)
                 chips(REMARK_OPTIONS, { it == remark }) { remark = if (remark == it) "" else it }
