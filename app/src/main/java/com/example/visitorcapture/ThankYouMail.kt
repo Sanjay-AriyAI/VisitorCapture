@@ -63,7 +63,19 @@ object ThankYou {
     /** Initial status for a freshly saved visitor: only a plausible address is ever queued. */
     fun initialStatus(email: String) = if (isValidEmail(email)) PENDING else ""
 
-    fun subject(company: String) = "Thank you for visiting $company"
+    fun subject(company: String, updated: Boolean = false) =
+        if (updated) "Updated: your visit summary from $company (final version)" else "Thank you for visiting $company"
+
+    /** The record was mailed before, so the next mail is the "updated, final version" one. */
+    fun isUpdate(v: Visitor) = v.thankYouSentAt > 0
+
+    /**
+     * True when an edit should trigger the "updated" mail: the earlier mail went out, the address is still valid,
+     * and something the visitor can see in the mail changed. Edits to staff-only fields (notes, remarks) send nothing.
+     */
+    fun needsUpdateMail(old: Visitor, edited: Visitor) =
+        old.thankYouStatus == SENT && isValidEmail(edited.email) &&
+            (htmlBody(old, "") != htmlBody(edited, "") || old.email.trim() != edited.email.trim())
 
     /** One sentence on what happens next, from the follow-up and purpose of visit; "" if nothing was planned. */
     fun nextStep(v: Visitor): String {
@@ -85,10 +97,12 @@ object ThankYou {
     }
 
     /** Plain-text body (fallback part of the mail), personalised from the visit. Pure function so it can be unit-tested. */
-    fun body(v: Visitor, company: String): String {
+    fun body(v: Visitor, company: String, updated: Boolean = false): String {
         val first = v.name.trim().ifBlank { "" }
         val sb = StringBuilder()
         sb.append(if (first.isNotEmpty()) "Dear $first,\n\n" else "Dear Sir/Madam,\n\n")
+        if (updated) sb.append("We have updated the details we recorded during your visit. This e-mail replaces our earlier " +
+            "message; please treat it as the final version.\n\n")
         sb.append("Thank you for visiting the $company stand")
         if (v.attendedByName.isNotBlank()) sb.append(" and for taking the time to speak with ${v.attendedByName}")
         sb.append(". It was a pleasure to meet")
@@ -178,7 +192,7 @@ object ThankYou {
      * Internal staff fields (discussion notes, remarks, follow-up remarks) are never included: they are not meant for the visitor.
      * [logoCid] is the Content-ID of an embedded logo, or null to show the company name as text.
      */
-    fun htmlBody(v: Visitor, company: String, logoCid: String? = null): String {
+    fun htmlBody(v: Visitor, company: String, logoCid: String? = null, updated: Boolean = false): String {
         val name = v.name.trim()
         val visitFmt = SimpleDateFormat("EEEE, d MMMM yyyy 'at' HH:mm", Locale.getDefault())
         val year = Calendar.getInstance().get(Calendar.YEAR)
@@ -215,20 +229,27 @@ object ThankYou {
         sb.append("""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light">
-<title>${esc(subject(company))}</title></head>
+<title>${esc(subject(company, updated))}</title></head>
 <body style="margin:0;padding:0;background:$PAGE;">
-<div style="display:none;max-height:0;overflow:hidden;opacity:0;">Thank you for visiting ${esc(company)}. Here is a summary of your visit.</div>
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;">${if (updated) "Your visit details have been updated. This is the final version."
+    else "Thank you for visiting ${esc(company)}. Here is a summary of your visit."}</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:$PAGE;">
 <tr><td align="center" style="padding:24px 12px;">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid $RULE;">
   <tr><td style="padding:24px 32px 20px 32px;background:#FFFFFF;">$header</td></tr>
   <tr><td style="height:4px;line-height:4px;font-size:0;background:$AMBER;">&nbsp;</td></tr>
   <tr><td style="padding:28px 32px 0 32px;background:$NAVY;">
-    <div style="font-family:$FONT;font-size:24px;line-height:1.3;font-weight:700;color:#FFFFFF;">Thank you for your visit${if (name.isNotEmpty()) ", " + esc(name) else ""}!</div>
-    <div style="font-family:$FONT;font-size:14px;color:#C9D4DF;padding:6px 0 26px 0;">We're glad you stopped by our stand.</div>
+    ${if (updated) """<div style="font-family:$FONT;display:inline-block;background:$AMBER;color:$NAVY;font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;border-radius:4px;padding:4px 10px;margin-bottom:10px;">Updated &middot; Final version</div>""" else ""}
+    <div style="font-family:$FONT;font-size:24px;line-height:1.3;font-weight:700;color:#FFFFFF;">${
+        if (updated) "Your visit details have been updated" else "Thank you for your visit" + (if (name.isNotEmpty()) ", " + esc(name) else "") + "!"}</div>
+    <div style="font-family:$FONT;font-size:14px;color:#C9D4DF;padding:6px 0 26px 0;">${
+        if (updated) "This e-mail replaces our earlier message." else "We're glad you stopped by our stand."}</div>
   </td></tr>
   <tr><td style="padding:26px 32px 0 32px;font-family:$FONT;font-size:15px;line-height:1.6;color:$NAVY;">
     <p style="margin:0 0 12px 0;">${if (name.isNotEmpty()) "Dear ${esc(name)}," else "Dear Sir/Madam,"}</p>
+    ${if (updated) """<p style="margin:0 0 12px 0;padding:12px 14px;background:#FFF8EC;border-left:4px solid $AMBER;border-radius:4px;">
+      We have reviewed and updated the details recorded during your visit. <b>Please treat this e-mail as the final version</b>
+      and disregard the summary we sent earlier.</p>""" else ""}
     <p style="margin:0;">$intro</p>
   </td></tr>
 """)
@@ -316,14 +337,14 @@ object ThankYou {
     } catch (e: Exception) { null }
 
     /** Blocking SMTP send; throws javax.mail.MessagingException on any failure. */
-    fun send(c: SmtpSettings, v: Visitor, logo: ByteArray? = null) {
+    fun send(c: SmtpSettings, v: Visitor, logo: ByteArray? = null, updated: Boolean = false) {
         val company = c.fromName.ifBlank { "our company" }
         val msg = MimeMessage(session(c)).apply {
             setFrom(fromAddress(c, company))
             setRecipients(Message.RecipientType.TO, InternetAddress.parse(v.email.trim(), true))
             if (isValidEmail(v.attendedByEmail)) replyTo = arrayOf(InternetAddress(v.attendedByEmail.trim(), v.attendedByName.ifBlank { null }, "UTF-8"))
-            setSubject(subject(company), "UTF-8")
-            setContent(content(body(v, company), htmlBody(v, company, if (logo != null) LOGO_CID else null), logo))
+            setSubject(subject(company, updated), "UTF-8")
+            setContent(content(body(v, company, updated), htmlBody(v, company, if (logo != null) LOGO_CID else null, updated), logo))
         }
         Transport.send(msg)
     }

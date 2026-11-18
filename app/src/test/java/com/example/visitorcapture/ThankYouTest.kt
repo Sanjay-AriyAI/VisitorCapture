@@ -83,6 +83,39 @@ class ThankYouTest {
         java.io.File("build/thank-you-preview.html").writeText(html)
     }
 
+    private fun mailed() = fullVisitor().copy(thankYouStatus = ThankYou.SENT, thankYouSentAt = 1_790_100_000_000L)
+
+    @Test fun editingVisitorDetailsAfterTheMailWentOutSendsAnUpdate() {
+        assertTrue(ThankYou.needsUpdateMail(mailed(), mailed().copy(phone = "+91 11111 22222")))
+        assertTrue(ThankYou.needsUpdateMail(mailed(), mailed().copy(products = "Retrofits > Blow Room")))
+        assertTrue(ThankYou.needsUpdateMail(mailed(), mailed().copy(leadOutcomes = "Order")))
+    }
+
+    @Test fun noUpdateMailForInternalEditsOrUnsentRecords() {
+        assertFalse(ThankYou.needsUpdateMail(mailed(), mailed()))
+        assertFalse(ThankYou.needsUpdateMail(mailed(), mailed().copy(discussionNotes = "changed", remarks = "Call Back")))
+        assertFalse(ThankYou.needsUpdateMail(mailed().copy(thankYouStatus = ThankYou.PENDING), mailed().copy(phone = "1")))
+        assertFalse(ThankYou.needsUpdateMail(mailed(), mailed().copy(email = "not-an-address")))
+    }
+
+    @Test fun updatedMailSaysItIsTheFinalVersion() {
+        val h = ThankYou.htmlBody(mailed(), "Naren Group", updated = true)
+        assertTrue(h.contains("Final version"))
+        assertTrue(h.contains("final version"))
+        assertTrue(ThankYou.body(mailed(), "Naren Group", updated = true).contains("final version"))
+        assertTrue(ThankYou.subject("Naren Group", updated = true).startsWith("Updated:"))
+        assertFalse(ThankYou.htmlBody(mailed(), "Naren Group").contains("Final version"))
+        assertTrue(ThankYou.isUpdate(mailed()))
+    }
+
+    @Test fun writeUpdatedPreview() {
+        val logo = java.io.File("src/main/res/drawable-nodpi/naren_logo.png")
+        val html = ThankYou.htmlBody(mailed(), "Naren Group", "LOGO", updated = true).replace("cid:LOGO",
+            if (logo.exists()) "data:image/png;base64," + java.util.Base64.getEncoder().encodeToString(logo.readBytes()) else "")
+        java.io.File("build").mkdirs()
+        java.io.File("build/thank-you-updated-preview.html").writeText(html)
+    }
+
     @Test fun followUpIsMentionedWhenPlanned() {
         val b = ThankYou.body(visitor().copy(followUpAction = "Schedule Factory Visit", followUpAt = 1_800_000_000_000L), "Naren Group")
         assertTrue(b.contains("factory"))

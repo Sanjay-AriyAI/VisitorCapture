@@ -42,7 +42,8 @@ data class Visitor(
     val followUpAt: Long = 0,           // follow-up date and time (epoch ms), 0 if none
     val followUpNote: String = "",      // free text when followUpAction is "Remarks"
     val thankYouStatus: String = "",    // "" (no valid e-mail / imported) | PENDING | SENT | FAILED
-    val thankYouSentAt: Long = 0        // epoch ms the thank-you mail was accepted by the SMTP server, 0 if not yet
+    val thankYouSentAt: Long = 0        // epoch ms the last thank-you mail was accepted by the SMTP server, 0 if never;
+                                        // > 0 on a re-queued record means the next mail is the "updated, final version" one
 )
 
 /** Staff who have logged in on this phone by scanning their vCard QR code. */
@@ -73,6 +74,9 @@ interface VisitorDao {
     @Query("UPDATE visitors SET thankYouStatus = 'QUEUED' WHERE thankYouStatus = 'PENDING'") suspend fun queueAllThankYou(): Int
     @Query("UPDATE visitors SET thankYouStatus = :status, thankYouSentAt = :at WHERE uid = :uid")
     suspend fun markThankYou(uid: String, status: String, at: Long)
+    /** Changes only the status. thankYouSentAt is kept, so a record that was mailed before still sends the "updated" version. */
+    @Query("UPDATE visitors SET thankYouStatus = :status WHERE uid = :uid")
+    suspend fun setThankYouStatus(uid: String, status: String)
     @Query("SELECT * FROM visitors ORDER BY createdAt DESC") fun all(): Flow<List<Visitor>>
     @Query("SELECT COUNT(*) FROM visitors WHERE uid LIKE :prefix || '%'") suspend fun countUidPrefix(prefix: String): Int
     /** Profile edited: visits this staff member attended on this phone follow the corrected details. */

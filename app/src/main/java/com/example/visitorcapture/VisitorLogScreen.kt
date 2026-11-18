@@ -199,8 +199,8 @@ private fun VisitorCard(v: Visitor, fmt: SimpleDateFormat, expanded: Boolean, on
             listOf(v.customerType, v.marketExposure).filter { it.isNotBlank() }.forEach { Pill(it) }
             when (v.thankYouStatus) {
                 ThankYou.SENT -> Pill("Mail sent", Steel, LineDim)
-                ThankYou.QUEUED -> Pill("Mail queued", Amber)
-                ThankYou.PENDING -> Pill("Mail not sent", Amber)
+                ThankYou.QUEUED -> Pill(if (ThankYou.isUpdate(v)) "Update queued" else "Mail queued", Amber)
+                ThankYou.PENDING -> Pill(if (ThankYou.isUpdate(v)) "Update not sent" else "Mail not sent", Amber)
                 ThankYou.FAILED -> Pill("Mail failed", Danger, Color_F0C3B8)
             }
         }
@@ -226,8 +226,11 @@ private fun VisitorCard(v: Visitor, fmt: SimpleDateFormat, expanded: Boolean, on
                 Detail("Discussion notes", v.discussionNotes)
                 when (v.thankYouStatus) {
                     ThankYou.SENT -> Detail("Thank-you mail", "Sent " + fmt.format(Date(v.thankYouSentAt)))
-                    ThankYou.QUEUED -> Detail("Thank-you mail", "Queued, sends when online")
-                    ThankYou.PENDING -> Detail("Thank-you mail", "Not sent yet")
+                    ThankYou.QUEUED -> Detail("Thank-you mail", if (ThankYou.isUpdate(v))
+                        "First sent ${fmt.format(Date(v.thankYouSentAt))} · updated version queued, sends when online"
+                        else "Queued, sends when online")
+                    ThankYou.PENDING -> Detail("Thank-you mail", if (ThankYou.isUpdate(v))
+                        "First sent ${fmt.format(Date(v.thankYouSentAt))} · updated version not sent yet" else "Not sent yet")
                     ThankYou.FAILED -> Row(verticalAlignment = Alignment.CenterVertically) {
                         Detail("Thank-you mail", "Failed", Modifier.weight(1f))
                         TextButton(onRetry) { Text("Retry", color = AmberText) }

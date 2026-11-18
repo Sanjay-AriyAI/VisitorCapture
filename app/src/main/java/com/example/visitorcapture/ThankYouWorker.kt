@@ -26,16 +26,16 @@ class ThankYouWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
         val queued = dao.queuedThankYou()
         val logo = if (queued.isNotEmpty()) ThankYou.loadLogo(applicationContext) else null   // read once per run
         for (v in queued) {
-            if (!ThankYou.isValidEmail(v.email)) { dao.markThankYou(v.uid, ThankYou.FAILED, 0); continue }
+            if (!ThankYou.isValidEmail(v.email)) { dao.setThankYouStatus(v.uid, ThankYou.FAILED); continue }
             try {
-                ThankYou.send(cfg, v, logo)
+                ThankYou.send(cfg, v, logo, updated = ThankYou.isUpdate(v))   // mailed before: "updated, final version" mail
                 dao.markThankYou(v.uid, ThankYou.SENT, System.currentTimeMillis())
             } catch (e: AddressException) {
-                dao.markThankYou(v.uid, ThankYou.FAILED, 0)
+                dao.setThankYouStatus(v.uid, ThankYou.FAILED)
             } catch (e: SendFailedException) {
                 // the server refused this recipient (e.g. mailbox does not exist): retrying will not help
                 Log.w(TAG, "Refused for ${v.uid}: ${e.message}")
-                dao.markThankYou(v.uid, ThankYou.FAILED, 0)
+                dao.setThankYouStatus(v.uid, ThankYou.FAILED)
             } catch (e: AuthenticationFailedException) {
                 Log.e(TAG, "SMTP login failed - check smtp.user / smtp.password", e); retry = true
             } catch (e: MessagingException) {

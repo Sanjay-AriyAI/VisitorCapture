@@ -405,7 +405,19 @@ fun App() {
                 onEdit = { updated -> editProfile(updated) }, onBack = { section = AppPage.Visit })
             AppPage.Logs -> VisitorLogScreen(visitors, onBack = { section = AppPage.Visit },
                 onExport = { exportData() }, onImport = { importPicker.launch(arrayOf("*/*")) },
-                onEdit = { v -> scope.launch { db.dao().update(v) } },
+                onEdit = { edited ->
+                    // Already mailed and the visitor-facing details changed: send the "updated, final version" mail.
+                    val old = visitors.find { it.uid == edited.uid }
+                    val resend = old != null && ThankYou.needsUpdateMail(old, edited)
+                    val auto = resend && appSettings.autoThankYou && SmtpSettings.load(ctx).complete
+                    val v = if (resend) edited.copy(thankYouStatus = if (auto) ThankYou.QUEUED else ThankYou.PENDING) else edited
+                    scope.launch {
+                        db.dao().update(v)
+                        if (auto) ThankYouWorker.enqueue(ctx)
+                        if (resend) snackbar.showSnackbar(if (auto) "Saved. Updated mail will be sent to ${v.email.trim()}"
+                            else "Saved. Updated mail is waiting in Mail settings")
+                    }
+                },
                 onDelete = { v ->
                     // Removed at once with an Undo; photos are only deleted once the snackbar goes away without Undo.
                     scope.launch {
@@ -420,7 +432,7 @@ fun App() {
                 onClear = { scope.launch { db.dao().clear(); File(ctx.filesDir, "cards").deleteRecursively() } },
                 onRetryThankYou = { v ->
                     scope.launch {
-                        if (ThankYou.isValidEmail(v.email)) { db.dao().markThankYou(v.uid, ThankYou.QUEUED, 0); ThankYouWorker.enqueue(ctx) }
+                        if (ThankYou.isValidEmail(v.email)) { db.dao().setThankYouStatus(v.uid, ThankYou.QUEUED); ThankYouWorker.enqueue(ctx) }
                     }
                 })
             AppPage.Mail -> MailSettingsScreen(visitors, onBack = { section = AppPage.Visit }, onSaved = { msg, tested ->
