@@ -2,16 +2,21 @@ package com.example.visitorcapture
 
 import android.content.Context
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.Properties
+import javax.activation.DataHandler
 import javax.mail.Authenticator
 import javax.mail.Message
 import javax.mail.PasswordAuthentication
 import javax.mail.Session
 import javax.mail.Transport
 import javax.mail.internet.InternetAddress
+import javax.mail.internet.MimeBodyPart
 import javax.mail.internet.MimeMessage
+import javax.mail.internet.MimeMultipart
+import javax.mail.util.ByteArrayDataSource
 
 /** SMTP account used for the thank-you mail. Entered on the Mail settings screen; build-time values are only the default. */
 data class SmtpSettings(
@@ -48,6 +53,9 @@ object ThankYou {
     const val SENT = "SENT"
     const val FAILED = "FAILED"
 
+    /** Content-ID of the company logo embedded in the HTML mail. */
+    const val LOGO_CID = "company-logo"
+
     private val EMAIL_RX = Regex("^[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}$")
 
     fun isValidEmail(s: String) = EMAIL_RX.matches(s.trim())
@@ -57,7 +65,26 @@ object ThankYou {
 
     fun subject(company: String) = "Thank you for visiting $company"
 
-    /** Plain-text body, personalised from what was recorded during the visit. Pure function so it can be unit-tested. */
+    /** One sentence on what happens next, from the follow-up and purpose of visit; "" if nothing was planned. */
+    fun nextStep(v: Visitor): String {
+        val fmt = SimpleDateFormat("EEEE, d MMMM yyyy 'at' HH:mm", Locale.getDefault())
+        return when (v.followUpAction) {
+            "Send Quotation" -> "We will send you the quotation shortly" +
+                (if (v.followUpAt > 0) ", by ${SimpleDateFormat("d MMMM yyyy", Locale.getDefault()).format(Date(v.followUpAt))}." else ".")
+            "Schedule Factory Visit" -> if (v.followUpAt > 0) "We look forward to welcoming you at our factory on ${fmt.format(Date(v.followUpAt))}."
+                else "We will be in touch to arrange your factory visit."
+            "Automatic E-mail Reminder" -> "We will follow up with you by e-mail."
+            else -> when {
+                "Sample Request" in v.leadOutcomes -> "We will get back to you shortly regarding your sample request."
+                "Order" in v.leadOutcomes -> "We will confirm the details of your order shortly."
+                "Factory Visit" in v.leadOutcomes -> "We will be in touch to arrange your factory visit."
+                v.remarks == "Call Back" -> "Our team will call you back soon."
+                else -> ""
+            }
+        }
+    }
+
+    /** Plain-text body (fallback part of the mail), personalised from the visit. Pure function so it can be unit-tested. */
     fun body(v: Visitor, company: String): String {
         val first = v.name.trim().ifBlank { "" }
         val sb = StringBuilder()
@@ -75,21 +102,7 @@ object ThankYou {
             sb.append('\n')
         }
 
-        val fmt = SimpleDateFormat("EEEE, d MMMM yyyy 'at' HH:mm", Locale.getDefault())
-        val next = when (v.followUpAction) {
-            "Send Quotation" -> "We will send you the quotation shortly" +
-                (if (v.followUpAt > 0) ", by ${SimpleDateFormat("d MMMM yyyy", Locale.getDefault()).format(Date(v.followUpAt))}." else ".")
-            "Schedule Factory Visit" -> if (v.followUpAt > 0) "We look forward to welcoming you at our factory on ${fmt.format(Date(v.followUpAt))}."
-                else "We will be in touch to arrange your factory visit."
-            "Automatic E-mail Reminder" -> "We will follow up with you by e-mail."
-            else -> when {
-                "Sample Request" in v.leadOutcomes -> "We will get back to you shortly regarding your sample request."
-                "Order" in v.leadOutcomes -> "We will confirm the details of your order shortly."
-                "Factory Visit" in v.leadOutcomes -> "We will be in touch to arrange your factory visit."
-                v.remarks == "Call Back" -> "Our team will call you back soon."
-                else -> ""
-            }
-        }
+        val next = nextStep(v)
         if (next.isNotEmpty()) sb.append(next).append("\n\n")
 
         sb.append("If you have any questions in the meantime, just reply to this e-mail")
@@ -100,6 +113,159 @@ object ThankYou {
         sb.append(company).append('\n')
         if (v.attendedByPhone.isNotBlank()) sb.append(v.attendedByPhone.trim()).append('\n')
         if (v.attendedByEmail.isNotBlank()) sb.append(v.attendedByEmail.trim()).append('\n')
+        return sb.toString()
+    }
+
+    // ------------------------------------------------------------------ HTML mail
+
+    // Brand colours, matching the app theme. Mail clients ignore <style> blocks and CSS variables, so everything is inline.
+    private const val NAVY = "#0B2033"
+    private const val AMBER = "#E8A33D"
+    private const val AMBER_DARK = "#A35F00"
+    private const val MUTED = "#5B6B7B"
+    private const val PAGE = "#F3F5F8"
+    private const val RULE = "#E6EBF1"
+    private const val FONT = "'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+
+    private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        .replace("\"", "&quot;").replace("'", "&#39;")
+    private fun escLines(s: String) = esc(s.trim()).replace(Regex("\r?\n"), "<br>")
+
+    /** A titled block with an amber rule under the heading. */
+    private fun section(title: String, inner: String) = """
+        <tr><td style="padding:24px 32px 0 32px;">
+          <div style="font-family:$FONT;font-size:11px;letter-spacing:1.6px;font-weight:700;color:$AMBER_DARK;text-transform:uppercase;padding-bottom:8px;border-bottom:2px solid $AMBER;">${esc(title)}</div>
+          $inner
+        </td></tr>"""
+
+    /** Label / value table; blank values are left out, and an all-blank table renders nothing. */
+    private fun details(rows: List<Pair<String, String>>): String {
+        val body = rows.filter { it.second.isNotBlank() }.joinToString("") { (k, v) ->
+            """<tr>
+              <td style="font-family:$FONT;padding:9px 12px 9px 0;width:36%;color:$MUTED;font-size:13px;vertical-align:top;border-bottom:1px solid $RULE;">${esc(k)}</td>
+              <td style="font-family:$FONT;padding:9px 0;color:$NAVY;font-size:14px;font-weight:600;vertical-align:top;border-bottom:1px solid $RULE;">${escLines(v)}</td>
+            </tr>"""
+        }
+        return if (body.isEmpty()) "" else """<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">$body</table>"""
+    }
+
+    private fun chips(items: List<String>) = items.joinToString("") {
+        """<span style="display:inline-block;font-family:$FONT;background:#FFF3E0;color:#7A4600;border:1px solid #F3D19C;border-radius:14px;padding:5px 12px;margin:10px 6px 0 0;font-size:13px;font-weight:600;">${esc(it)}</span>"""
+    }
+
+    /** Products grouped as Product → machine → makes / models, from the stored "A > B > C" catalogue paths. */
+    private fun productsHtml(v: Visitor): String {
+        val paths = v.products.split("; ").map { it.trim() }.filter { it.isNotBlank() }.map { it.split(" > ") }
+        return paths.groupBy { it[0] }.entries.joinToString("") { (product, list) ->
+            val machines = list.filter { it.size > 1 }.groupBy { it[1] }.entries.joinToString("") { (machine, x) ->
+                val more = x.map { it.drop(2).joinToString(" · ") }.filter { it.isNotEmpty() }.distinct()
+                """<li style="margin:0 0 6px 0;"><span style="color:$NAVY;font-weight:600;">${esc(machine)}</span>""" +
+                    (if (more.isEmpty()) "" else """<span style="color:$MUTED;"> — ${esc(more.joinToString(", "))}</span>""") + "</li>"
+            }
+            val extra = if (product == "Other Products" && v.otherDetail.isNotBlank())
+                """<div style="color:$MUTED;font-size:13px;margin:4px 0 0 0;">${escLines(v.otherDetail)}</div>""" else ""
+            """<div style="font-family:$FONT;margin:14px 0 0 0;padding:12px 14px;background:#FAFBFC;border:1px solid $RULE;border-left:4px solid $AMBER;border-radius:6px;">
+              <div style="color:$NAVY;font-size:15px;font-weight:700;">${esc(product)}</div>
+              ${if (machines.isEmpty()) "" else """<ul style="margin:8px 0 0 0;padding:0 0 0 18px;font-size:14px;line-height:1.45;">$machines</ul>"""}
+              $extra
+            </div>"""
+        }
+    }
+
+    /**
+     * Branded HTML body: greeting, the details captured from the card, profile, products of interest,
+     * purpose of visit, next step and the staff member's signature. Pure function so it can be unit-tested.
+     * Internal staff fields (discussion notes, remarks, follow-up remarks) are never included: they are not meant for the visitor.
+     * [logoCid] is the Content-ID of an embedded logo, or null to show the company name as text.
+     */
+    fun htmlBody(v: Visitor, company: String, logoCid: String? = null): String {
+        val name = v.name.trim()
+        val visitFmt = SimpleDateFormat("EEEE, d MMMM yyyy 'at' HH:mm", Locale.getDefault())
+        val year = Calendar.getInstance().get(Calendar.YEAR)
+
+        val intro = StringBuilder("Thank you for visiting the <b>${esc(company)}</b> stand")
+        if (v.attendedByName.isNotBlank()) intro.append(" and for taking the time to speak with <b>${esc(v.attendedByName.trim())}</b>")
+        intro.append(". It was a pleasure to meet you")
+        if (v.company.isNotBlank()) intro.append(" and learn about <b>${esc(v.company.trim())}</b>")
+        intro.append(". For your reference, here is a summary of the details we recorded during your visit.")
+
+        val contact = details(listOf(
+            "Name" to name, "Designation" to v.title, "Company" to v.company,
+            "Phone" to v.phone, "E-mail" to v.email, "Address" to v.address,
+            "State" to v.state, "Country" to v.country))
+        val profile = details(listOf("Customer type" to v.customerType, "Market" to v.marketExposure))
+        val products = productsHtml(v)
+        val additional = v.additionalInterest.trim()
+        val purposes = v.leadOutcomes.split("; ").map { it.trim() }.filter { it.isNotBlank() }
+        val visit = details(listOf(
+            "Date & time" to if (v.createdAt > 0) visitFmt.format(Date(v.createdAt)) else "",
+            "Attended by" to listOf(v.attendedByName.trim(), v.attendedByTitle.trim()).filter { it.isNotBlank() }.joinToString(", ")))
+        val next = nextStep(v)
+
+        val header = if (logoCid != null)
+            """<img src="cid:$logoCid" alt="${esc(company)}" width="180" style="display:block;border:0;outline:none;width:180px;max-width:60%;height:auto;">"""
+        else """<div style="font-family:$FONT;font-size:22px;font-weight:800;color:$NAVY;">${esc(company)}</div>"""
+
+        val sig = listOf(
+            v.attendedByTitle.trim(), company,
+            v.attendedByPhone.trim(), v.attendedByEmail.trim()
+        ).filter { it.isNotBlank() }.joinToString("<br>") { esc(it) }
+
+        val sb = StringBuilder()
+        sb.append("""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light">
+<title>${esc(subject(company))}</title></head>
+<body style="margin:0;padding:0;background:$PAGE;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;">Thank you for visiting ${esc(company)}. Here is a summary of your visit.</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:$PAGE;">
+<tr><td align="center" style="padding:24px 12px;">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid $RULE;">
+  <tr><td style="padding:24px 32px 20px 32px;background:#FFFFFF;">$header</td></tr>
+  <tr><td style="height:4px;line-height:4px;font-size:0;background:$AMBER;">&nbsp;</td></tr>
+  <tr><td style="padding:28px 32px 0 32px;background:$NAVY;">
+    <div style="font-family:$FONT;font-size:24px;line-height:1.3;font-weight:700;color:#FFFFFF;">Thank you for your visit${if (name.isNotEmpty()) ", " + esc(name) else ""}!</div>
+    <div style="font-family:$FONT;font-size:14px;color:#C9D4DF;padding:6px 0 26px 0;">We're glad you stopped by our stand.</div>
+  </td></tr>
+  <tr><td style="padding:26px 32px 0 32px;font-family:$FONT;font-size:15px;line-height:1.6;color:$NAVY;">
+    <p style="margin:0 0 12px 0;">${if (name.isNotEmpty()) "Dear ${esc(name)}," else "Dear Sir/Madam,"}</p>
+    <p style="margin:0;">$intro</p>
+  </td></tr>
+""")
+        if (next.isNotEmpty()) sb.append("""
+  <tr><td style="padding:20px 32px 0 32px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+      <td style="font-family:$FONT;background:#FFF8EC;border:1px solid #F3D19C;border-radius:8px;padding:14px 16px;">
+        <div style="font-size:11px;letter-spacing:1.6px;font-weight:700;color:$AMBER_DARK;text-transform:uppercase;">Next step</div>
+        <div style="font-size:15px;color:$NAVY;font-weight:600;padding-top:4px;line-height:1.5;">${esc(next)}</div>
+      </td></tr></table>
+  </td></tr>""")
+        if (contact.isNotEmpty()) sb.append(section("Your contact details", contact))
+        if (profile.isNotEmpty()) sb.append(section("Your profile", profile))
+        if (products.isNotEmpty() || additional.isNotEmpty()) sb.append(section("Products of interest",
+            products + (if (additional.isEmpty()) "" else
+                """<div style="font-family:$FONT;margin:14px 0 0 0;font-size:13px;color:$MUTED;">Also interested in</div>
+                   <div style="font-family:$FONT;font-size:14px;color:$NAVY;font-weight:600;padding-top:2px;line-height:1.5;">${escLines(additional)}</div>""")))
+        if (purposes.isNotEmpty()) sb.append(section("Purpose of visit", "<div>${chips(purposes)}</div>"))
+        if (visit.isNotEmpty()) sb.append(section("Your visit", visit))
+        sb.append("""
+  <tr><td style="padding:26px 32px 0 32px;font-family:$FONT;font-size:14px;line-height:1.6;color:$NAVY;">
+    <p style="margin:0;">If any of these details need correcting, or you have questions in the meantime, simply reply to this e-mail${
+            if (v.attendedByPhone.isNotBlank()) " or call <a href=\"tel:${esc(v.attendedByPhone.filter { it.isDigit() || it == '+' })}\" style=\"color:$AMBER_DARK;font-weight:600;text-decoration:none;\">${esc(v.attendedByPhone.trim())}</a>" else ""}.</p>
+  </td></tr>
+  <tr><td style="padding:22px 32px 30px 32px;font-family:$FONT;font-size:14px;line-height:1.55;color:$NAVY;">
+    <div style="color:$MUTED;">Warm regards,</div>
+    <div style="font-size:16px;font-weight:700;padding-top:4px;">${esc(v.attendedByName.trim().ifBlank { company })}</div>
+    <div style="color:$MUTED;font-size:13px;">$sig</div>
+  </td></tr>
+  <tr><td style="padding:16px 32px;background:$NAVY;font-family:$FONT;font-size:11px;line-height:1.6;color:#9FB0C1;text-align:center;">
+    You received this e-mail because you shared your business card with ${esc(company)}.<br>
+    © $year ${esc(company)}. All rights reserved.
+  </td></tr>
+</table>
+<div style="font-family:$FONT;font-size:10px;color:#9AA7B4;padding:12px 0 0 0;text-align:center;">Developed &amp; Powered by <b>$DEVELOPER_BRAND</b>&trade;</div>
+</td></tr></table>
+</body></html>""")
         return sb.toString()
     }
 
@@ -121,15 +287,43 @@ object ThankYou {
 
     private fun fromAddress(c: SmtpSettings, name: String) = InternetAddress(c.from.ifBlank { c.user }.trim(), name, "UTF-8")
 
+    /**
+     * multipart/alternative: plain text first (fallback), then the HTML version.
+     * With a [logo] (PNG bytes) the HTML part becomes multipart/related so the logo travels inline, not as an attachment.
+     */
+    private fun content(plain: String, html: String, logo: ByteArray?): MimeMultipart {
+        val alt = MimeMultipart("alternative")
+        alt.addBodyPart(MimeBodyPart().apply { setText(plain, "UTF-8") })
+        val htmlPart = MimeBodyPart().apply { setContent(html, "text/html; charset=UTF-8") }
+        if (logo == null) alt.addBodyPart(htmlPart)
+        else {
+            val related = MimeMultipart("related")
+            related.addBodyPart(htmlPart)
+            related.addBodyPart(MimeBodyPart().apply {
+                dataHandler = DataHandler(ByteArrayDataSource(logo, "image/png"))
+                contentID = "<$LOGO_CID>"
+                disposition = MimeBodyPart.INLINE
+                fileName = "logo.png"
+            })
+            alt.addBodyPart(MimeBodyPart().apply { setContent(related) })
+        }
+        return alt
+    }
+
+    /** Company logo for the mail header, or null if it can't be read (the mail then shows the company name instead). */
+    fun loadLogo(ctx: Context): ByteArray? = try {
+        ctx.resources.openRawResource(R.drawable.naren_logo).use { it.readBytes() }
+    } catch (e: Exception) { null }
+
     /** Blocking SMTP send; throws javax.mail.MessagingException on any failure. */
-    fun send(c: SmtpSettings, v: Visitor) {
+    fun send(c: SmtpSettings, v: Visitor, logo: ByteArray? = null) {
         val company = c.fromName.ifBlank { "our company" }
         val msg = MimeMessage(session(c)).apply {
             setFrom(fromAddress(c, company))
             setRecipients(Message.RecipientType.TO, InternetAddress.parse(v.email.trim(), true))
             if (isValidEmail(v.attendedByEmail)) replyTo = arrayOf(InternetAddress(v.attendedByEmail.trim(), v.attendedByName.ifBlank { null }, "UTF-8"))
             setSubject(subject(company), "UTF-8")
-            setText(body(v, company), "UTF-8")
+            setContent(content(body(v, company), htmlBody(v, company, if (logo != null) LOGO_CID else null), logo))
         }
         Transport.send(msg)
     }

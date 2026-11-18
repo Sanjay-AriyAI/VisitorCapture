@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -387,5 +388,47 @@ fun FormSheet(title: String, onDismiss: () -> Unit, onSave: () -> Unit, icon: Im
                 PrimaryButton(saveLabel, saveEnabled, Modifier.weight(1f)) { close(onSave) }
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------- Developer branding
+
+const val DEVELOPER_BRAND = "AriyAI Tech"
+
+/** "AriyAI Tech™": brand in bold accent, ™ set as a small superscript (™, not ®: the mark is not registered). */
+@Composable
+private fun brandCredit(prefix: String, brandSize: androidx.compose.ui.unit.TextUnit) =
+    androidx.compose.ui.text.buildAnnotatedString {
+        append(prefix)
+        withStyle(androidx.compose.ui.text.SpanStyle(color = AmberText, fontWeight = FontWeight.Bold, fontSize = brandSize)) {
+            append(DEVELOPER_BRAND)
+        }
+        withStyle(androidx.compose.ui.text.SpanStyle(color = AmberText, fontSize = brandSize * 0.6f,
+            baselineShift = androidx.compose.ui.text.style.BaselineShift.Superscript)) { append("™") }
+    }
+
+/** Slim footer shown at the bottom of every page: "© 2026 · Developed & Powered by AriyAI Tech™". */
+@Composable
+fun BrandFooter(modifier: Modifier = Modifier) {
+    val year = remember { java.util.Calendar.getInstance().get(java.util.Calendar.YEAR) }
+    Column(modifier.fillMaxWidth().background(NavyDeep.copy(alpha = if (IsDark) 0.45f else 0.06f))) {
+        HorizontalDivider(color = if (IsDark) LineC.copy(alpha = 0.08f) else Outline)
+        Text(brandCredit("© $year  ·  Developed & Powered by ", 11.sp), fontSize = 11.sp, color = Steel,
+            letterSpacing = 0.2.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp))
+    }
+}
+
+/** Fuller credit block for the About page. */
+@Composable
+fun BrandCreditBlock(modifier: Modifier = Modifier) {
+    val year = remember { java.util.Calendar.getInstance().get(java.util.Calendar.YEAR) }
+    Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text("DESIGNED, DEVELOPED & POWERED BY", fontSize = 10.sp, letterSpacing = 1.5.sp, color = Steel, fontWeight = FontWeight.SemiBold)
+        Text(brandCredit("", 20.sp), fontSize = 20.sp, fontFamily = Display)
+        Text("© $year $DEVELOPER_BRAND. All rights reserved.", fontSize = 12.sp, color = Steel)
+        Text("$DEVELOPER_BRAND™ is a trademark of $DEVELOPER_BRAND.", fontSize = 11.sp, color = Steel.copy(alpha = 0.8f))
     }
 }

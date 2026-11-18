@@ -23,10 +23,12 @@ class ThankYouWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
         if (!cfg.complete) { Log.w(TAG, "Mail settings not filled in; thank-you mails stay PENDING"); return Result.success() }
         val dao = AppDb.get(applicationContext).dao()
         var retry = false
-        for (v in dao.queuedThankYou()) {
+        val queued = dao.queuedThankYou()
+        val logo = if (queued.isNotEmpty()) ThankYou.loadLogo(applicationContext) else null   // read once per run
+        for (v in queued) {
             if (!ThankYou.isValidEmail(v.email)) { dao.markThankYou(v.uid, ThankYou.FAILED, 0); continue }
             try {
-                ThankYou.send(cfg, v)
+                ThankYou.send(cfg, v, logo)
                 dao.markThankYou(v.uid, ThankYou.SENT, System.currentTimeMillis())
             } catch (e: AddressException) {
                 dao.markThankYou(v.uid, ThankYou.FAILED, 0)

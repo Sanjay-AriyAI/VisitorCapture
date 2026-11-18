@@ -396,7 +396,8 @@ fun App() {
                 onSelect = { go(it) }, onNewVisit = { startNewVisit() }, onSwitchUser = { switchUser() })
         }) {
         Box(Modifier.fillMaxSize().background(Navy).systemBarsPadding().imePadding()) {   // content shrinks above the keyboard
-          AnimatedContent(section, label = "section", transitionSpec = {
+         Column(Modifier.fillMaxSize()) {
+          AnimatedContent(section, Modifier.weight(1f).fillMaxWidth(), label = "section", transitionSpec = {
               val dir = if (targetState.ordinal >= initialState.ordinal) 1 else -1
               (fadeIn(tween(220)) + slideInHorizontally(tween(260)) { dir * it / 8 }) togetherWith fadeOut(tween(140))
           }) { page -> when (page) {
@@ -666,6 +667,11 @@ fun App() {
                 }
             }
           } }   // when (page) / AnimatedContent
+          // developer credit on every page; hidden while typing so the keyboard keeps the full height
+          @OptIn(ExperimentalLayoutApi::class)
+          val imeOpen = WindowInsets.isImeVisible
+          if (!imeOpen) BrandFooter()
+         }   // Column
 
             importMsg?.let { msg ->
                 AlertDialog(onDismissRequest = { importMsg = null }, title = { Text("Import finished") }, text = { Text(msg) },

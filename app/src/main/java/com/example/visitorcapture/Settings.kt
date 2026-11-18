@@ -262,6 +262,7 @@ fun AboutScreen(deviceName: String, visitorCount: Int, onBack: () -> Unit) = Sec
     }
     Text("Visitors are stored on this phone only. Export the log regularly and merge exports from all stand phones.",
         color = Steel, fontSize = 12.sp, modifier = Modifier.padding(start = 4.dp, top = 12.dp))
+    BrandCreditBlock(Modifier.padding(top = 28.dp, bottom = 12.dp))
 }
 
 // ---------------------------------------------------------------- Mail settings
