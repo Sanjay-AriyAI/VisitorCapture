@@ -14,8 +14,7 @@ class CatalogTest {
     }
 
     @Test fun makeWithoutKitsIsStillSelectable() {
-        assertEquals(listOf("Retrofits > OHTC > ELGI > PLC conversion", "Retrofits > OHTC > SIMTA",
-            "Retrofits > OHTC > LUWA", "Retrofits > OHTC > Electro-Jet"), Catalog.paths("Retrofits", retrofit("OHTC")))
+        assertEquals(listOf("Retrofits > OHTC > ELGI > PLC conversion", "Retrofits > OHTC > SIMTA > PLC Conversion"), Catalog.paths("Retrofits", retrofit("OHTC")))
     }
 
     @Test fun retrofitOthersIsFreeTextOnly() {

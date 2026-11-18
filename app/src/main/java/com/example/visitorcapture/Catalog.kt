@@ -41,9 +41,6 @@ object Catalog {
             sec("Rieter Air-Jet", "Rieter Air-Jet"))
     )
 
-    /** A make with no retrofit listed yet: a single chip with the make's name, so the visitor can still record it. */
-    private fun bare(make: String) = sec(make, make)
-
     /** "Others" make in Retrofits: the visitor types what they need instead of picking from a list. */
     private val OTHERS = Section("Others", emptyList(), freeText = true)
 
@@ -72,7 +69,6 @@ object Catalog {
         m("Draw Frame",
             sec("LMW", "Sliver monitoring HMI conversion", EARTH, THERMISTOR),
             sec("Rieter", "B2 conversion kit", "Sliver monitoring HMI conversion", "DC to AC drive conversion", EARTH, THERMISTOR),
-            bare("Trutzschler"),
             OTHERS),
         m("Comber", *arrayOf("LMW", "Rieter").map { sec(it, "HMI conversion", EARTH, THERMISTOR) }.toTypedArray(), OTHERS),
         m("Lap Former", sec("LMW", "HMI conversion"), sec("Rieter", "HMI conversion"), OTHERS),
@@ -91,9 +87,9 @@ object Catalog {
             sec("Polar", SUCTION, FEELER, FEATHER_PCB),
             sec("Eco Pulsar", FEELER, FEATHER_PCB),
             OTHERS),
-        m("OHTC", sec("ELGI", "PLC conversion"), bare("SIMTA"), bare("LUWA"), bare("Electro-Jet")),
+        m("OHTC", sec("ELGI", "PLC conversion"), sec("SIMTA", "PLC Conversion"), OTHERS),
         m("Humidification Plant", *HUMID.map { if (it == "Others") OTHERS else sec(it, *HUMID_KITS) }.toTypedArray()),
-        m("Compressor", brands("Digital pressure monitoring display unit (4 inch / 8 inch)"))
+        m("Compressor", brands("Digital pressure monitoring display unit (4 inch / 8 inch)"), OTHERS)
     )
 
     /** Other Products spare parts: plain entries with nothing under them, ticked by tapping the card itself. */

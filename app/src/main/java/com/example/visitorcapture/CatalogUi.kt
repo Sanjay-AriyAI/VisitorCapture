@@ -97,9 +97,6 @@ fun CatalogScreen(
                                 }
                             }
                         }
-                        LinkButton(if (ticked == all.size) "Clear all for ${m.name}" else "Select everything for ${m.name}") {
-                            onSetMany(all, ticked != all.size)
-                        }
                     }
                 }
             }
