@@ -79,7 +79,7 @@ fun VisitorLogScreen(
     val matchesView: (Visitor) -> Boolean = remember(query, filter) {
         val q = query.trim().lowercase()
         val match: (Visitor) -> Boolean = { v -> filter.matches(v, today) && (q.isEmpty() ||
-            listOf(v.name, v.company, v.email, v.extraEmails, v.phone, v.title).any { it.lowercase().contains(q) }) }
+            listOf(v.name, v.company, v.email, v.extraEmails, v.phone, v.extraPhones, v.title).any { it.lowercase().contains(q) }) }
         match
     }
     val shown = remember(inRange, matchesView) { inRange.filter(matchesView) }
@@ -329,7 +329,7 @@ private fun VisitorCard(v: Visitor, fmt: SimpleDateFormat, expanded: Boolean, on
         Row(verticalAlignment = Alignment.Top) {
             if (v.cardPhotoPath != null)
                 AsyncImage(File(v.cardPhotoPath), "Business card", Modifier.padding(top = 2.dp).size(width = 56.dp, height = 38.dp)
-                    .clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Crop)
+                    .clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Fit)
             else Avatar(v.name, size = 40.dp, container = PanelOn, content = AmberText)
             Column(Modifier.weight(1f).padding(start = 12.dp)) {
                 Text(v.name.ifBlank { "Unnamed visitor" }, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = LineC,
@@ -362,7 +362,7 @@ private fun VisitorCard(v: Visitor, fmt: SimpleDateFormat, expanded: Boolean, on
         AnimatedVisibility(expanded, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
             Column(Modifier.padding(top = 12.dp, end = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 HorizontalDivider(color = LineC.copy(alpha = 0.08f))
-                Detail("Contact", (listOf(v.email) + v.extraEmailList() + v.phone).filter { it.isNotBlank() }.joinToString(" · "))
+                Detail("Contact", (listOf(v.email) + v.extraEmailList() + v.phone + v.extraPhoneList()).filter { it.isNotBlank() }.joinToString(" · "))
                 Detail("Website", v.website)
                 Detail("Address", listOf(v.address, v.state, v.country).filter { it.isNotBlank() }.joinToString(", "))
                 Detail("Products", Catalog.summarize(v.products.split("; ").filter { it.isNotBlank() }))
@@ -434,6 +434,7 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
     var extraEmails by remember { mutableStateOf(v.extraEmailList()) }
     var website by remember { mutableStateOf(v.website) }
     var phone by remember { mutableStateOf(v.phone) }
+    var extraPhones by remember { mutableStateOf(v.extraPhoneList()) }
     var address by remember { mutableStateOf(v.address) }
     var state by remember { mutableStateOf(v.state) }
     var country by remember { mutableStateOf(v.country) }
@@ -458,9 +459,10 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
         }
     fun save() {
         val (mail, extras) = splitEmails(email, extraEmails)
+        val (mainPhone, morePhones) = splitPhones(phone, extraPhones)
         val newFactory = if (Reminder.FACTORY.outcome in outcomes) factoryAt else 0L
         val newFollow = if (Reminder.FOLLOW_UP.outcome in outcomes) followAt else 0L
-        val edited = v.copy(name = name.trim(), title = title.trim(), company = company.trim(), email = mail, extraEmails = extras, website = website.trim(), phone = phone.trim(),
+        val edited = v.copy(name = name.trim(), title = title.trim(), company = company.trim(), email = mail, extraEmails = extras, website = website.trim(), phone = mainPhone, extraPhones = morePhones,
             address = address.trim(), state = state.trim(), country = country.trim(),
             customerType = customerType, marketExposure = market, otherDetail = other.trim(),
             additionalInterest = interest.trim(),
@@ -507,6 +509,18 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
                     LinkButton(if (extraEmails.isEmpty()) "+ Add secondary e-mail" else "+ Add another e-mail") { extraEmails = extraEmails + "" }
                 field("Website", website) { website = it }
                 field("Phone", phone) { phone = it }
+                extraPhones.forEachIndexed { i, num ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(num, { v -> extraPhones = extraPhones.toMutableList().also { it[i] = v } },
+                            label = { Text(EXTRA_PHONE_LABELS[i]) }, singleLine = true, modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(12.dp), colors = darkFieldColors(filled = false))
+                        IconButton({ extraPhones = extraPhones.filterIndexed { j, _ -> j != i } }) {
+                            Icon(Icons.Default.Close, "Remove ${EXTRA_PHONE_LABELS[i].lowercase()}", tint = Steel)
+                        }
+                    }
+                }
+                if (extraPhones.size < MAX_PHONES - 1)
+                    LinkButton(if (extraPhones.isEmpty()) "+ Add secondary phone" else "+ Add another phone") { extraPhones = extraPhones + "" }
                 field("Address", address, true) { address = it }
                 field("State", state) { state = it }
                 field("Country", country) { country = it }

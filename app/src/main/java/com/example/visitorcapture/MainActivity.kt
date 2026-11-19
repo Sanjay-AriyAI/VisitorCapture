@@ -66,6 +66,7 @@ val LEAD_OUTCOMES = listOf("Product Enquiry", "Sample Request", "General Enquiry
 val REMARK_OPTIONS = listOf("Call Back", "Factory Visit", "Need Follow-up", "Others")
 const val MAX_NOTE_PHOTOS = 5   // handwritten-enquiry images per visit
 val EXTRA_EMAIL_LABELS = listOf("Secondary e-mail", "Third e-mail")   // one per extra field, MAX_EMAILS - 1 of them
+val EXTRA_PHONE_LABELS = listOf("Secondary phone", "Third phone")     // one per extra field, MAX_PHONES - 1 of them
 val STEP_LABELS = listOf("Scan", "Details", "Customer", "Products", "Outcome", "Done")
 
 enum class Screen(val step: Int) {
@@ -75,6 +76,7 @@ enum class Screen(val step: Int) {
 data class Form(
     val name: String = "", val title: String = "", val company: String = "",
     val phone: String = "", val email: String = "",
+    val extraPhones: List<String> = emptyList(),   // secondary / third phone fields, at most MAX_PHONES - 1
     val extraEmails: List<String> = emptyList(),   // secondary / third e-mail fields, at most MAX_EMAILS - 1
     val website: String = "",
     val address: String = "", val state: String = "", val country: String = "",
@@ -175,7 +177,7 @@ fun App() {
             val p = try { withContext(Dispatchers.Default) { CardReader.read(ctx, file, back) } } catch (e: Exception) { null }
             if (p == null) { ocrError = true; fieldHints = emptyMap() }
             else {
-                form = form.copy(name = p.name, title = p.title, company = p.company, phone = p.phone, email = p.email, extraEmails = p.extraEmails, website = p.website,
+                form = form.copy(name = p.name, title = p.title, company = p.company, phone = p.phone, extraPhones = p.extraPhones, email = p.email, extraEmails = p.extraEmails, website = p.website,
                     address = p.address, state = p.state, country = p.country.ifBlank { appSettings.defaultCountry.trim() })
                 fieldHints = p.flags; ocrError = false; ocrRaw = p.raw
             }
@@ -194,11 +196,29 @@ fun App() {
         takePicture.launch(FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", f))
     }
     val camPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) launchCamera() }
-    /** Opens the camera for the front of the card, or for the optional back when [back] is true. */
-    fun openCamera(back: Boolean = false) {
-        shootingBack = back
+    /** Plain system camera: used only when the document scanner cannot run on this device. */
+    fun openSystemCamera() {
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchCamera()
         else camPerm.launch(Manifest.permission.CAMERA)
+    }
+    // Document scanner result: the cropped, straightened card is copied into the same cards/ file the camera would use.
+    val scanCard = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
+        val back = shootingBack
+        val dir = File(ctx.filesDir, "cards").apply { mkdirs() }
+        val f = File(dir, "card_${System.currentTimeMillis()}${if (back) "_back" else ""}.jpg")
+        scope.launch {
+            val ok = res.resultCode == android.app.Activity.RESULT_OK &&
+                withContext(Dispatchers.IO) { CardScanner.copyResult(ctx, res.data, f) }
+            if (back) { if (ok) { backFile = f; backTaken = true } else { backFile = null; backTaken = false } }
+            else if (ok) { photoFile = f; photoTaken = true } else { photoFile = null; photoTaken = false }
+        }
+    }
+    /** Opens the card scanner for the front of the card, or for the optional back when [back] is true. */
+    fun openCamera(back: Boolean = false) {
+        shootingBack = back
+        val activity = ctx as? ComponentActivity
+        if (activity == null) openSystemCamera()
+        else CardScanner.start(activity, scanCard) { openSystemCamera() }
     }
 
     // Note images live next to the card photos (cards/ is already shared with the camera via the FileProvider).
@@ -279,8 +299,10 @@ fun App() {
         val followAt = if (Reminder.FOLLOW_UP.outcome in form.outcomes) form.followUpAt else 0L
         val uidPrefix = UidGen.prefix(e?.name.orEmpty(), deviceName, at)
         val (mainEmail, extraEmails) = splitEmails(form.email, form.extraEmails)
+        val (mainPhone, extraPhones) = splitPhones(form.phone, form.extraPhones)
         val v = Visitor(uid = uidPrefix, deviceName = deviceName,
-            name = form.name, title = form.title, company = form.company, email = mainEmail, extraEmails = extraEmails, website = form.website.trim(), phone = form.phone,
+            name = form.name, title = form.title, company = form.company, email = mainEmail, extraEmails = extraEmails, website = form.website.trim(),
+            phone = mainPhone, extraPhones = extraPhones,
             address = form.address.trim(), state = form.state.trim(), country = form.country.trim(),
             customerType = form.customerType ?: "", marketExposure = form.marketExposure ?: "",
             products = form.products.joinToString("; "),
@@ -531,7 +553,7 @@ fun App() {
                                 .background(if (IsDark) NavyDeep else androidx.compose.ui.graphics.Color(0xFFE6EBF1))
                                 .viewfinder(Amber), contentAlignment = Alignment.Center) {
                                 if (photoTaken && photoFile != null)
-                                    AsyncImage(photoFile, "Card", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                    AsyncImage(photoFile, "Card", Modifier.fillMaxSize().padding(16.dp), contentScale = ContentScale.Fit)
                                 else Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Icon(Icons.Default.CreditCard, null, tint = Steel, modifier = Modifier.size(44.dp))
                                     Text("No photo yet", color = Steel)
@@ -546,7 +568,7 @@ fun App() {
                                     .background(if (IsDark) NavyDeep else androidx.compose.ui.graphics.Color(0xFFE6EBF1)),
                                     contentAlignment = Alignment.Center) {
                                     if (backTaken && backFile != null)
-                                        AsyncImage(backFile, "Back of card", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                        AsyncImage(backFile, "Back of card", Modifier.fillMaxSize().padding(4.dp), contentScale = ContentScale.Fit)
                                     else Icon(Icons.Default.AddAPhoto, null, tint = Steel, modifier = Modifier.size(26.dp))
                                 }
                                 Column(Modifier.weight(1f).padding(start = 12.dp)) {
@@ -569,7 +591,7 @@ fun App() {
                         Screen.Processing -> Centered {
                             Box(Modifier.fillMaxWidth().aspectRatio(1.6f).clip(CardShape).background(NavyDeep)
                                 .scanSweep(Amber).viewfinder(Amber), contentAlignment = Alignment.Center) {
-                                photoFile?.let { AsyncImage(it, "Card", Modifier.fillMaxSize(), contentScale = ContentScale.Crop, alpha = 0.85f) }
+                                photoFile?.let { AsyncImage(it, "Card", Modifier.fillMaxSize().padding(16.dp), contentScale = ContentScale.Fit, alpha = 0.85f) }
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(Modifier.size(20.dp), color = Amber, strokeWidth = 2.5.dp)
@@ -591,10 +613,10 @@ fun App() {
                                     Spacer(Modifier.width(12.dp))
                                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                         AsyncImage(photoFile, "Scanned card, front", Modifier.width(96.dp).aspectRatio(1.6f).clip(RoundedCornerShape(10.dp))
-                                            .border(1.5.dp, Amber.copy(alpha = 0.6f), RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
+                                            .border(1.5.dp, Amber.copy(alpha = 0.6f), RoundedCornerShape(10.dp)).padding(3.dp), contentScale = ContentScale.Fit)
                                         if (backTaken && backFile != null)
                                             AsyncImage(backFile, "Scanned card, back", Modifier.width(96.dp).aspectRatio(1.6f).clip(RoundedCornerShape(10.dp))
-                                                .border(1.5.dp, Amber.copy(alpha = 0.6f), RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
+                                                .border(1.5.dp, Amber.copy(alpha = 0.6f), RoundedCornerShape(10.dp)).padding(3.dp), contentScale = ContentScale.Fit)
                                     }
                                 }
                             }
@@ -609,6 +631,21 @@ fun App() {
                             FormSection("Company & contact", Icons.Default.Business) {
                                 PaperField("Company", form.company, Icons.Default.Apartment, hint = fieldHints["company"], caps = KeyboardCapitalization.Words) { form = form.copy(company = it); fieldHints = fieldHints - "company" }
                                 PaperField("Phone", form.phone, Icons.Default.Phone, hint = fieldHints["phone"], keyboard = KeyboardType.Phone) { form = form.copy(phone = it); fieldHints = fieldHints - "phone" }
+                                // Extra numbers: filled when the card shows more than one, or added by hand (max MAX_PHONES in all).
+                                form.extraPhones.forEachIndexed { i, num ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        PaperField(EXTRA_PHONE_LABELS[i], num, Icons.Default.Call, Modifier.weight(1f), keyboard = KeyboardType.Phone) { v ->
+                                            form = form.copy(extraPhones = form.extraPhones.toMutableList().also { it[i] = v })
+                                        }
+                                        IconButton({ form = form.copy(extraPhones = form.extraPhones.filterIndexed { j, _ -> j != i }) }) {
+                                            Icon(Icons.Default.Close, "Remove ${EXTRA_PHONE_LABELS[i].lowercase()}", tint = Steel)
+                                        }
+                                    }
+                                }
+                                if (form.extraPhones.size < MAX_PHONES - 1)
+                                    LinkButton(if (form.extraPhones.isEmpty()) "+ Add secondary phone" else "+ Add another phone") {
+                                        form = form.copy(extraPhones = form.extraPhones + "")
+                                    }
                                 PaperField("E-mail", form.email, Icons.Default.Email, hint = fieldHints["email"], keyboard = KeyboardType.Email) { form = form.copy(email = it); fieldHints = fieldHints - "email" }
                                 // Extra addresses: filled when the card shows more than one, or added by hand (max MAX_EMAILS in all).
                                 form.extraEmails.forEachIndexed { i, mail ->

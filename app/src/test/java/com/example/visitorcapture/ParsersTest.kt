@@ -539,3 +539,48 @@ class WebsiteTest {
         assertEquals("", findWebsite(listOf("sales@abc.in", "+91 98765 43210")))
     }
 }
+
+class ExtraPhonesTest {
+    @Test fun keepsEveryDirectNumberOnTheCard() {
+        val p = parseCard("""
+            Ravi Jayaraman
+            Co-Founder & CEO
+            +1 407 536 8820
+            +91 948778 1028
+            ravi@mindspark.example
+        """.trimIndent())
+        assertEquals("+91 94877 81028", p.phone)                     // Indian mobile is the main number
+        assertEquals(listOf("+1 407 536 8820"), p.extraPhones)
+    }
+
+    @Test fun atMostThreeNumbersAndNoRepeats() {
+        val p = parseCard("""
+            Anil Kumar
+            Mob: +91 98765 43210
+            98765 43210
+            Ph: 0422 2345678
+            Tel: +91 422 2345679
+            Off: +91 422 2345680
+        """.trimIndent())
+        assertEquals("+91 98765 43210", p.phone)
+        assertEquals(2, p.extraPhones.size)
+        assertTrue(p.extraPhones.none { phoneKey(it) == phoneKey(p.phone) })
+    }
+
+    @Test fun helplinesAreNotExtras() {
+        val p = parseCard("Anil Kumar\nMob: 98765 43210\nToll free: 1800 123 4567")
+        assertEquals(emptyList<String>(), p.extraPhones)
+    }
+
+    @Test fun sidesPoolTheirNumbers() {
+        val m = mergeSides(Parsed(phone = "+91 98765 43210"),
+            Parsed(phone = "98765 43210", extraPhones = listOf("0422 2345678", "+1 407 536 8820")))!!
+        assertEquals("+91 98765 43210", m.phone)
+        assertEquals(listOf("0422 2345678", "+1 407 536 8820"), m.extraPhones)
+    }
+
+    @Test fun savingTidiesThePhoneFields() {
+        assertEquals("98765 43210" to "0422 2345678", splitPhones(" ", listOf("98765 43210", "+91 98765 43210", "0422 2345678")))
+        assertEquals("" to "", splitPhones("", listOf("", " ")))
+    }
+}
