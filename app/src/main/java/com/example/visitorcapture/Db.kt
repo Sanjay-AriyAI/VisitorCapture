@@ -53,11 +53,25 @@ data class Visitor(
     val cardBackPhotoPath: String? = null,
     // secondary / third e-mail addresses joined with "; " (the main one is [email]); mails go to all of them
     val extraEmails: String = "",
-    val website: String = ""             // company website from the card, e.g. www.example.com
+    val website: String = "",            // company website from the card, e.g. www.example.com
+    // secondary / third phone numbers joined with "; " (the main one is [phone])
+    val extraPhones: String = ""
 )
 
 /** The extra addresses as a list (see [Visitor.extraEmails]). */
 fun Visitor.extraEmailList(): List<String> = extraEmails.split(";").map { it.trim() }.filter { it.isNotEmpty() }
+
+/** The extra phone numbers as a list (see [Visitor.extraPhones]). */
+fun Visitor.extraPhoneList(): List<String> = extraPhones.split(";").map { it.trim() }.filter { it.isNotEmpty() }
+
+/**
+ * Tidies the phone fields of a form before saving: blanks and repeats (same last 10 digits) are dropped and the first
+ * remaining number becomes the main one. Returns (main phone, extras joined with "; ").
+ */
+fun splitPhones(main: String, extras: List<String>): Pair<String, String> {
+    val all = (listOf(main) + extras).map { it.trim() }.filter { it.isNotEmpty() }.distinctBy(::phoneKey).take(MAX_PHONES)
+    return all.firstOrNull().orEmpty() to all.drop(1).joinToString("; ")
+}
 
 /** Every address the visitor can be mailed at, main one first; invalid ones and repeats are left out. */
 fun Visitor.mailableEmails(): List<String> =
@@ -235,7 +249,14 @@ val MIGRATION_10_11 = object : Migration(10, 11) {
     }
 }
 
-@Database(entities = [Visitor::class, Employee::class], version = 11, exportSchema = false)
+/** v11 -> v12: secondary / third phone numbers. Existing rows have none. */
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `extraPhones` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+@Database(entities = [Visitor::class, Employee::class], version = 12, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): VisitorDao
     abstract fun employeeDao(): EmployeeDao
@@ -243,7 +264,7 @@ abstract class AppDb : RoomDatabase() {
         @Volatile private var inst: AppDb? = null
         fun get(c: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(c.applicationContext, AppDb::class.java, "visitors.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
                 .build().also { inst = it }
         }
     }

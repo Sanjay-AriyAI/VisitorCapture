@@ -66,6 +66,7 @@ val LEAD_OUTCOMES = listOf("Product Enquiry", "Sample Request", "General Enquiry
 val REMARK_OPTIONS = listOf("Call Back", "Factory Visit", "Need Follow-up", "Others")
 const val MAX_NOTE_PHOTOS = 5   // handwritten-enquiry images per visit
 val EXTRA_EMAIL_LABELS = listOf("Secondary e-mail", "Third e-mail")   // one per extra field, MAX_EMAILS - 1 of them
+val EXTRA_PHONE_LABELS = listOf("Secondary phone", "Third phone")     // one per extra field, MAX_PHONES - 1 of them
 val STEP_LABELS = listOf("Scan", "Details", "Customer", "Products", "Outcome", "Done")
 
 enum class Screen(val step: Int) {
@@ -75,6 +76,7 @@ enum class Screen(val step: Int) {
 data class Form(
     val name: String = "", val title: String = "", val company: String = "",
     val phone: String = "", val email: String = "",
+    val extraPhones: List<String> = emptyList(),   // secondary / third phone fields, at most MAX_PHONES - 1
     val extraEmails: List<String> = emptyList(),   // secondary / third e-mail fields, at most MAX_EMAILS - 1
     val website: String = "",
     val address: String = "", val state: String = "", val country: String = "",
@@ -175,7 +177,7 @@ fun App() {
             val p = try { withContext(Dispatchers.Default) { CardReader.read(ctx, file, back) } } catch (e: Exception) { null }
             if (p == null) { ocrError = true; fieldHints = emptyMap() }
             else {
-                form = form.copy(name = p.name, title = p.title, company = p.company, phone = p.phone, email = p.email, extraEmails = p.extraEmails, website = p.website,
+                form = form.copy(name = p.name, title = p.title, company = p.company, phone = p.phone, extraPhones = p.extraPhones, email = p.email, extraEmails = p.extraEmails, website = p.website,
                     address = p.address, state = p.state, country = p.country.ifBlank { appSettings.defaultCountry.trim() })
                 fieldHints = p.flags; ocrError = false; ocrRaw = p.raw
             }
@@ -297,8 +299,10 @@ fun App() {
         val followAt = if (Reminder.FOLLOW_UP.outcome in form.outcomes) form.followUpAt else 0L
         val uidPrefix = UidGen.prefix(e?.name.orEmpty(), deviceName, at)
         val (mainEmail, extraEmails) = splitEmails(form.email, form.extraEmails)
+        val (mainPhone, extraPhones) = splitPhones(form.phone, form.extraPhones)
         val v = Visitor(uid = uidPrefix, deviceName = deviceName,
-            name = form.name, title = form.title, company = form.company, email = mainEmail, extraEmails = extraEmails, website = form.website.trim(), phone = form.phone,
+            name = form.name, title = form.title, company = form.company, email = mainEmail, extraEmails = extraEmails, website = form.website.trim(),
+            phone = mainPhone, extraPhones = extraPhones,
             address = form.address.trim(), state = form.state.trim(), country = form.country.trim(),
             customerType = form.customerType ?: "", marketExposure = form.marketExposure ?: "",
             products = form.products.joinToString("; "),
@@ -627,6 +631,21 @@ fun App() {
                             FormSection("Company & contact", Icons.Default.Business) {
                                 PaperField("Company", form.company, Icons.Default.Apartment, hint = fieldHints["company"], caps = KeyboardCapitalization.Words) { form = form.copy(company = it); fieldHints = fieldHints - "company" }
                                 PaperField("Phone", form.phone, Icons.Default.Phone, hint = fieldHints["phone"], keyboard = KeyboardType.Phone) { form = form.copy(phone = it); fieldHints = fieldHints - "phone" }
+                                // Extra numbers: filled when the card shows more than one, or added by hand (max MAX_PHONES in all).
+                                form.extraPhones.forEachIndexed { i, num ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        PaperField(EXTRA_PHONE_LABELS[i], num, Icons.Default.Call, Modifier.weight(1f), keyboard = KeyboardType.Phone) { v ->
+                                            form = form.copy(extraPhones = form.extraPhones.toMutableList().also { it[i] = v })
+                                        }
+                                        IconButton({ form = form.copy(extraPhones = form.extraPhones.filterIndexed { j, _ -> j != i }) }) {
+                                            Icon(Icons.Default.Close, "Remove ${EXTRA_PHONE_LABELS[i].lowercase()}", tint = Steel)
+                                        }
+                                    }
+                                }
+                                if (form.extraPhones.size < MAX_PHONES - 1)
+                                    LinkButton(if (form.extraPhones.isEmpty()) "+ Add secondary phone" else "+ Add another phone") {
+                                        form = form.copy(extraPhones = form.extraPhones + "")
+                                    }
                                 PaperField("E-mail", form.email, Icons.Default.Email, hint = fieldHints["email"], keyboard = KeyboardType.Email) { form = form.copy(email = it); fieldHints = fieldHints - "email" }
                                 // Extra addresses: filled when the card shows more than one, or added by hand (max MAX_EMAILS in all).
                                 form.extraEmails.forEachIndexed { i, mail ->
