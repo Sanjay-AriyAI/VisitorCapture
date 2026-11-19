@@ -338,14 +338,23 @@ fun Pill(text: String, color: Color = Amber, textColor: Color = if (color == Amb
         modifier = Modifier.clip(RoundedCornerShape(50)).background(color.copy(alpha = if (IsDark) 0.16f else 0.13f))
             .padding(horizontal = 10.dp, vertical = 4.dp))
 
-/** The logo artwork is dark on transparent/white, so it always sits on a white plate. */
+/**
+ * Dark theme: the white-lettered logo (naren_logo_dark) straight on the dark background.
+ * Light theme: the navy-lettered logo (naren_logo) on a white plate. The e-mail header also uses naren_logo, since
+ * white letters would vanish on its white background.
+ */
 @Composable
-fun NarenLogo(modifier: Modifier = Modifier, compact: Boolean = false) =
-    Image(painterResource(R.drawable.naren_logo), "Naren - Empowering quality and trust",
-        modifier.then(if (!IsDark) Modifier.border(1.dp, Outline, RoundedCornerShape(if (compact) 8.dp else 16.dp)) else Modifier)
-            .clip(RoundedCornerShape(if (compact) 8.dp else 16.dp)).background(Color.White)
-            .padding(horizontal = if (compact) 8.dp else 18.dp, vertical = if (compact) 4.dp else 14.dp),
-        contentScale = ContentScale.Fit)
+fun NarenLogo(modifier: Modifier = Modifier, compact: Boolean = false) {
+    val shape = RoundedCornerShape(if (compact) 8.dp else 16.dp)
+    val inset = Modifier.padding(horizontal = if (compact) 8.dp else 18.dp, vertical = if (compact) 4.dp else 14.dp)
+    if (IsDark)
+        Image(painterResource(R.drawable.naren_logo_dark), "Naren - Empowering quality and trust",
+            modifier.then(inset), contentScale = ContentScale.Fit)
+    else
+        Image(painterResource(R.drawable.naren_logo), "Naren - Empowering quality and trust",
+            modifier.border(1.dp, Outline, shape).clip(shape).background(Color.White).then(inset),
+            contentScale = ContentScale.Fit)
+}
 
 /** Small number tile (Welcome screen): big value and label. */
 @Composable
