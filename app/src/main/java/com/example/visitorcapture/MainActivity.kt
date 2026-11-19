@@ -11,7 +11,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.core.view.WindowCompat
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -419,16 +418,15 @@ fun App() {
         }
     }
 
-    // ---- appearance: theme + status/navigation bar icons that match it ----
-    val dark = resolveDark(appSettings.theme, isSystemInDarkTheme())
+    // ---- status/navigation bar icons: white, to show on the teal background ----
     SideEffect {
         val window = (ctx as? android.app.Activity)?.window ?: return@SideEffect
         WindowCompat.getInsetsController(window, view).apply {
-            isAppearanceLightStatusBars = !dark; isAppearanceLightNavigationBars = !dark
+            isAppearanceLightStatusBars = false; isAppearanceLightNavigationBars = false
         }
     }
 
-    VisitorTheme(dark) {
+    VisitorTheme {
     CompositionLocalProvider(LocalContentColor provides LineC, LocalSnackbar provides snackbar) {
       ModalNavigationDrawer(
         drawerState = drawerState,
@@ -861,7 +859,7 @@ fun PaperField(label: String, value: String, icon: androidx.compose.ui.graphics.
 @Composable
 fun FormSection(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, content: @Composable ColumnScope.() -> Unit) =
     Column(Modifier.fillMaxWidth().cardBorder().clip(CardShape)
-        .background(if (IsDark) androidx.compose.ui.graphics.Color(0xFF244D70) else Panel).padding(16.dp),
+        .background(PanelOn).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(30.dp).clip(RoundedCornerShape(9.dp)).background(Amber.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {

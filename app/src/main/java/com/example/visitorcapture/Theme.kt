@@ -1,7 +1,5 @@
 package com.example.visitorcapture
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -12,9 +10,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-
-/** Appearance chosen in Settings. */
-enum class ThemeMode(val label: String) { System("System"), Dark("Dark"), Light("Light") }
 
 /** The app's colour tokens. The old names in Ui.kt (Navy, Panel, Amber, …) read these, so both themes share all screens. */
 @Immutable
@@ -35,19 +30,14 @@ data class AppColors(
     val isDark: Boolean
 )
 
-val DarkColors = AppColors(
-    bg = Color(0xFF123049), bgDeep = Color(0xFF0B2033), card = Color(0xFF173A58), cardActive = Color(0xFF1D4363),
-    text = Color(0xFFEAF2F8), textDim = Color(0xFFB9CBDA), muted = Color(0xFF8099AC),
-    accent = Color(0xFFE8A33D), accentText = Color(0xFFF0B457), onAccent = Color(0xFF0B2033),
-    danger = Color(0xFFC0563F), dangerText = Color(0xFFF0C3B8), outline = Color(0x2EEAF2F8), isDark = true)
+/** The one app theme: brand teal #18A99F with white text and amber accents. */
+val TealColors = AppColors(
+    bg = Color(0xFF18A99F), bgDeep = Color(0xFF0E8A81), card = Color(0xFF12968D), cardActive = Color(0xFF0F8279),
+    text = Color(0xFFFFFFFF), textDim = Color(0xFFE3F6F4), muted = Color(0xFFC2EAE6),
+    accent = Color(0xFFE8A33D), accentText = Color(0xFFFFD27A), onAccent = Color(0xFF0B2033),
+    danger = Color(0xFFC0563F), dangerText = Color(0xFFFFE1D9), outline = Color(0x40FFFFFF), isDark = true)
 
-val LightColors = AppColors(
-    bg = Color(0xFFF3F5F8), bgDeep = Color(0xFFFFFFFF), card = Color(0xFFFFFFFF), cardActive = Color(0xFFFFF3E0),
-    text = Color(0xFF0B2033), textDim = Color(0xFF3B5266), muted = Color(0xFF66798A),
-    accent = Color(0xFFE8A33D), accentText = Color(0xFFA35F00), onAccent = Color(0xFF0B2033),
-    danger = Color(0xFFC0563F), dangerText = Color(0xFFB0391F), outline = Color(0xFFDCE3EA), isDark = false)
-
-val LocalAppColors = staticCompositionLocalOf { DarkColors }
+val LocalAppColors = staticCompositionLocalOf { TealColors }
 
 /** Plus Jakarta Sans, bundled in res/font (SIL Open Font License, see assets/licenses). */
 val Jakarta = FontFamily(
@@ -81,22 +71,11 @@ val AppShapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp), small = RoundedCornerShape(12.dp), medium = RoundedCornerShape(16.dp),
     large = RoundedCornerShape(20.dp), extraLarge = RoundedCornerShape(28.dp))
 
-fun resolveDark(mode: ThemeMode, systemDark: Boolean) = when (mode) {
-    ThemeMode.System -> systemDark; ThemeMode.Dark -> true; ThemeMode.Light -> false
-}
-
 /** Brand theme: tokens + a matching Material scheme, so dialogs, pickers, chips and menus follow the app's colours. */
 @Composable
-fun VisitorTheme(dark: Boolean, content: @Composable () -> Unit) {
-    val target = if (dark) DarkColors else LightColors
-    // colours glide when the appearance is switched, instead of snapping
-    val anim = tween<Color>(350)
-    @Composable fun a(c: Color) = animateColorAsState(c, anim, label = "theme").value
-    val c = target.copy(
-        bg = a(target.bg), bgDeep = a(target.bgDeep), card = a(target.card), cardActive = a(target.cardActive),
-        text = a(target.text), textDim = a(target.textDim), muted = a(target.muted), accentText = a(target.accentText),
-        dangerText = a(target.dangerText), outline = a(target.outline))
-    val scheme = if (dark) darkColorScheme(
+fun VisitorTheme(content: @Composable () -> Unit) {
+    val c = TealColors
+    val scheme = darkColorScheme(
         primary = c.accent, onPrimary = c.onAccent, primaryContainer = c.cardActive, onPrimaryContainer = c.text,
         secondary = c.textDim, onSecondary = c.bgDeep, secondaryContainer = c.cardActive, onSecondaryContainer = c.text,
         tertiary = c.accentText, background = c.bg, onBackground = c.text,
@@ -104,15 +83,6 @@ fun VisitorTheme(dark: Boolean, content: @Composable () -> Unit) {
         surfaceContainerLowest = c.bgDeep, surfaceContainerLow = c.bgDeep, surfaceContainer = c.card,
         surfaceContainerHigh = c.card, surfaceContainerHighest = c.cardActive, surfaceTint = Color.Transparent,
         inverseSurface = c.text, inverseOnSurface = c.bgDeep, inversePrimary = c.accentText,
-        outline = c.muted, outlineVariant = c.outline, error = c.danger, onError = Color.White, scrim = Color.Black)
-    else lightColorScheme(
-        primary = c.accent, onPrimary = c.onAccent, primaryContainer = c.cardActive, onPrimaryContainer = c.text,
-        secondary = c.textDim, onSecondary = Color.White, secondaryContainer = c.cardActive, onSecondaryContainer = c.text,
-        tertiary = c.accentText, background = c.bg, onBackground = c.text,
-        surface = c.bgDeep, onSurface = c.text, surfaceVariant = c.bg, onSurfaceVariant = c.textDim,
-        surfaceContainerLowest = Color.White, surfaceContainerLow = Color.White, surfaceContainer = Color.White,
-        surfaceContainerHigh = Color.White, surfaceContainerHighest = c.bg, surfaceTint = Color.Transparent,
-        inverseSurface = Color(0xFF0B2033), inverseOnSurface = Color.White, inversePrimary = c.accent,
         outline = c.muted, outlineVariant = c.outline, error = c.danger, onError = Color.White, scrim = Color.Black)
     CompositionLocalProvider(LocalAppColors provides c) {
         MaterialTheme(colorScheme = scheme, typography = AppTypography, shapes = AppShapes, content = content)

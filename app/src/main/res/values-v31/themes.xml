@@ -1,10 +1,10 @@
 <resources>
-    <!-- Android 12+ system splash: the white-lettered Naren logo on brand navy (no white icon plate). -->
+    <!-- Android 12+ system splash: the white-lettered Naren logo on brand teal (no white icon plate). -->
     <style name="Theme.App" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@color/brand_navy</item>
+        <item name="android:windowBackground">@color/brand_teal</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowSplashScreenBackground">@color/brand_navy</item>
+        <item name="android:windowSplashScreenBackground">@color/brand_teal</item>
         <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_icon</item>
     </style>
 </resources>

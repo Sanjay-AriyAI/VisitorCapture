@@ -34,13 +34,12 @@ data class AppSettings(
     val skipScan: Boolean = false,        // start each visit with manual entry instead of the card camera
     val defaultCountry: String = "",      // filled in when the card does not show a country
     val confirmAbandon: Boolean = true,   // ask before "Start new visit" throws away a visit in progress
-    val autoThankYou: Boolean = false,    // queue the thank-you mail as soon as a visit is saved
-    val theme: ThemeMode = ThemeMode.Dark // appearance: System / Dark / Light
+    val autoThankYou: Boolean = false     // queue the thank-you mail as soon as a visit is saved
 ) {
     fun save(p: SharedPreferences) = p.edit()
         .putBoolean("keep_awake", keepAwake).putBoolean("skip_scan", skipScan)
         .putString("default_country", defaultCountry).putBoolean("confirm_abandon", confirmAbandon)
-        .putBoolean("auto_thankyou", autoThankYou).putString("theme", theme.name).apply()
+        .putBoolean("auto_thankyou", autoThankYou).remove("theme").apply()   // "theme": old Appearance setting
 
     companion object {
         fun load(p: SharedPreferences) = AppSettings(
@@ -48,34 +47,7 @@ data class AppSettings(
             skipScan = p.getBoolean("skip_scan", false),
             defaultCountry = p.getString("default_country", "").orEmpty(),
             confirmAbandon = p.getBoolean("confirm_abandon", true),
-            autoThankYou = p.getBoolean("auto_thankyou", false),
-            theme = ThemeMode.values().firstOrNull { it.name == p.getString("theme", null) } ?: ThemeMode.Dark)
-    }
-}
-
-/** System · Dark · Light picker at the top of Settings. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun AppearancePicker(mode: ThemeMode, onPick: (ThemeMode) -> Unit) {
-    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
-    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(16.dp)) {
-        ThemeMode.values().forEachIndexed { i, m ->
-            SegmentedButton(selected = mode == m,
-                onClick = { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); onPick(m) },
-                shape = SegmentedButtonDefaults.itemShape(i, ThemeMode.values().size),
-                icon = {
-                    SegmentedButtonDefaults.Icon(mode == m) {
-                        Icon(when (m) { ThemeMode.System -> Icons.Default.BrightnessAuto
-                            ThemeMode.Dark -> Icons.Default.DarkMode; ThemeMode.Light -> Icons.Default.LightMode },
-                            null, Modifier.size(SegmentedButtonDefaults.IconSize))
-                    }
-                },
-                colors = SegmentedButtonDefaults.colors(
-                    activeContainerColor = Amber, activeContentColor = OnAmber, activeBorderColor = Amber,
-                    inactiveContainerColor = Panel, inactiveContentColor = LineC,
-                    inactiveBorderColor = if (IsDark) LineDim.copy(alpha = 0.35f) else Outline)
-            ) { Text(m.label, fontWeight = FontWeight.SemiBold) }
-        }
+            autoThankYou = p.getBoolean("auto_thankyou", false))
     }
 }
 
@@ -91,9 +63,6 @@ fun SettingsScreen(
     settings: AppSettings, onChange: (AppSettings) -> Unit,
     mailConfigured: Boolean, onOpen: (AppPage) -> Unit, onBack: () -> Unit
 ) = SectionPage("Settings", onBack) {
-    SectionHeader("Appearance")
-    SettingsGroup { AppearancePicker(settings.theme) { onChange(settings.copy(theme = it)) } }
-
     SectionHeader("Device")
     SettingsGroup {
         Box(Modifier.padding(16.dp)) {

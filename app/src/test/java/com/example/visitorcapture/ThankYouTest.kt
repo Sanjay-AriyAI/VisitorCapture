@@ -27,7 +27,7 @@ class ThankYouTest {
         assertTrue(b.contains("Carding"))
         assertTrue(b.contains("Control panel PLC conversion"))
         assertTrue(b.contains("+91 90000 11111"))
-        assertTrue(b.trimEnd().endsWith("Warm regards,\nTEAM NAREN GROUP"))
+        assertTrue(b.trimEnd().endsWith("Warm regards,\nTEAM NAREN"))
         assertFalse(b.contains("Sales Manager"))
     }
 
@@ -35,7 +35,7 @@ class ThankYouTest {
         val b = ThankYou.body(visitor().copy(name = "", company = "", products = "", attendedByName = "", attendedByPhone = ""), "Naren Group")
         assertTrue(b.startsWith("Dear Sir/Madam,"))
         assertFalse(b.contains("You showed interest"))
-        assertTrue(b.contains("TEAM NAREN GROUP"))
+        assertTrue(b.contains("TEAM NAREN"))
     }
 
     private fun fullVisitor() = visitor().copy(title = "Purchase Head", phone = "+91 98765 43210",
@@ -50,7 +50,7 @@ class ThankYouTest {
 
     @Test fun htmlBodyCarriesTheVisitAndOurCompanyDetails() {
         val h = ThankYou.htmlBody(fullVisitor(), "Naren Group", ThankYou.LOGO_CID, info = naren)
-        listOf("Anil Kumar", "INDIA ITME 2026", "Catalogue Link: To be updated shortly.", "TEAM NAREN GROUP", "OEM", "Domestic Visitor",
+        listOf("Anil Kumar", "INDIA ITME 2026", "Catalogue Link: To be updated shortly.", "TEAM NAREN", "OEM", "Domestic Visitor",
             "Mechanical Spares", "Carding", "Retrofits", "Blow Room", "Control panel PLC conversion",
             "Spindle tapes, 200 nos", "Product Enquiry", "Sample Request", "quotation", "Priya Rao", "Sales Manager",
             "Contact us", "1, Mill Road<br>Coimbatore 641014", "tel:+914220000000", "mailto:sales@naren.example",

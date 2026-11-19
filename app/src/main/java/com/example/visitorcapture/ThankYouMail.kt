@@ -150,7 +150,7 @@ object ThankYou {
     }
 
     /** Fixed sign-off under "Warm regards". */
-    const val SIGNATURE = "TEAM NAREN GROUP"
+    const val SIGNATURE = "TEAM NAREN"
 
     /** Opening text of the mail, paragraph by paragraph; true marks a headline (bold in the HTML mail). */
     val INTRO = listOf(
