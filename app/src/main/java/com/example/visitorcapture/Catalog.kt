@@ -96,7 +96,26 @@ object Catalog {
     private val otherProducts = listOf("Carding Belts", "Ceramic Scissors", "Direct Coupling", "HMI Conversion")
         .map { Machine(it, emptyList()) }
 
+    /**
+     * Mechanical spares: same as [spares], plus Fluff Cleaning Gun before Winding,
+     * Volkman under TFO, and Splicers + Mesdan Knotter after TFO.
+     */
+    private val mechanicalSpares = spares.flatMap {
+        if (it.name == "Winding") listOf(
+            m("Fluff Cleaning Gun",
+                sec("Mechanical", "150mm", "400mm", "550mm"),
+                sec("Electric", "150mm", "300mm")),
+            it
+        ) else if (it.name == "TFO") listOf(
+            m("TFO", brands("Murata", "Savio", "Veejay", "Volkman", "Others")),
+            m("Splicers", brands("110", "114", "115", "116", "490L", "498", "590L", "690", "698", "845", "895",
+                "4923A", "4923B", "4923E", "4941A", "Chinese")),
+            m("Mesdan Knotter", brands("L22/30I", "L-24/302", "L-26", "L-26/304", "L-30/213", "A061", "B063", "C064"))
+        ) else listOf(it)
+    }
+
     fun machinesFor(product: String) = when (product) {
+        "Mechanical Spares" -> mechanicalSpares
         "Retrofits" -> retrofits
         "Other Products" -> otherProducts
         else -> spares
