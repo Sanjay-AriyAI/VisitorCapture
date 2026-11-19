@@ -329,7 +329,7 @@ private fun VisitorCard(v: Visitor, fmt: SimpleDateFormat, expanded: Boolean, on
         Row(verticalAlignment = Alignment.Top) {
             if (v.cardPhotoPath != null)
                 AsyncImage(File(v.cardPhotoPath), "Business card", Modifier.padding(top = 2.dp).size(width = 56.dp, height = 38.dp)
-                    .clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Crop)
+                    .clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Fit)
             else Avatar(v.name, size = 40.dp, container = PanelOn, content = AmberText)
             Column(Modifier.weight(1f).padding(start = 12.dp)) {
                 Text(v.name.ifBlank { "Unnamed visitor" }, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = LineC,
