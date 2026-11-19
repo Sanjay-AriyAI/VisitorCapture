@@ -281,10 +281,15 @@ fun MailSettingsScreen(visitors: List<Visitor>, onBack: () -> Unit, onSaved: (me
     var showPassword by remember { mutableStateOf(false) }
     var from by remember { mutableStateOf(initial.from) }
     var fromName by remember { mutableStateOf(initial.fromName) }
+    var coAddress by remember { mutableStateOf(initial.company.address) }
+    var coPhone by remember { mutableStateOf(initial.company.phone) }
+    var coEmail by remember { mutableStateOf(initial.company.email) }
+    var coWebsite by remember { mutableStateOf(initial.company.website) }
     var status by remember { mutableStateOf<Pair<String, Boolean>?>(null) }   // message, isError
     var busy by remember { mutableStateOf(false) }
     var configured by remember { mutableStateOf(initial.complete) }
-    fun current() = SmtpSettings(host.trim(), port.trim().toIntOrNull() ?: 587, user.trim(), password, from.trim(), fromName.trim())
+    fun current() = SmtpSettings(host.trim(), port.trim().toIntOrNull() ?: 587, user.trim(), password, from.trim(), fromName.trim(),
+        CompanyInfo(coAddress.trim(), coPhone.trim(), coEmail.trim(), coWebsite.trim()))
 
     val unsent = visitors.count { it.thankYouStatus == ThankYou.PENDING }
     val queued = visitors.count { it.thankYouStatus == ThankYou.QUEUED }
@@ -342,6 +347,18 @@ fun MailSettingsScreen(visitors: List<Visitor>, onBack: () -> Unit, onSaved: (me
                     modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
                 MailField("Send from (blank = username)", from, Icons.Default.Outbox) { from = it }
                 MailField("Company name in the e-mail", fromName, Icons.Default.Business) { fromName = it }
+            }
+        }
+
+        SectionHeader("Company details (shown in the mail)")
+        SettingsGroup {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Shown to the visitor under \"Contact us\". Leave blank to hide a line.", fontSize = 12.sp, color = Steel)
+                OutlinedTextField(coAddress, { coAddress = it }, label = { Text("Address") }, minLines = 2, maxLines = 4,
+                    leadingIcon = { Icon(Icons.Default.Place, null) }, modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
+                MailField("Phone", coPhone, Icons.Default.Phone) { coPhone = it }
+                MailField("E-mail", coEmail, Icons.Default.Email) { coEmail = it }
+                MailField("Website", coWebsite, Icons.Default.Language) { coWebsite = it }
             }
         }
         status?.let { (msg, err) ->

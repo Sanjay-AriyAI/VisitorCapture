@@ -21,7 +21,8 @@ import javax.mail.util.ByteArrayDataSource
 /** SMTP account used for the thank-you mail. Entered on the Mail settings screen; build-time values are only the default. */
 data class SmtpSettings(
     val host: String = "", val port: Int = 587, val user: String = "", val password: String = "",
-    val from: String = "", val fromName: String = ""
+    val from: String = "", val fromName: String = "",
+    val company: CompanyInfo = CompanyInfo()
 ) {
     val complete get() = host.isNotBlank() && user.isNotBlank() && password.isNotBlank()
 
@@ -35,15 +36,27 @@ data class SmtpSettings(
                 user = p.getString(P + "user", null) ?: BuildConfig.SMTP_USER,
                 password = p.getString(P + "password", null) ?: BuildConfig.SMTP_PASSWORD,
                 from = p.getString(P + "from", null) ?: BuildConfig.SMTP_FROM,
-                fromName = p.getString(P + "fromName", null) ?: BuildConfig.SMTP_FROM_NAME)
+                fromName = p.getString(P + "fromName", null) ?: BuildConfig.SMTP_FROM_NAME,
+                company = CompanyInfo(
+                    address = p.getString(P + "coAddress", null) ?: "",
+                    phone = p.getString(P + "coPhone", null) ?: "",
+                    email = p.getString(P + "coEmail", null) ?: "",
+                    website = p.getString(P + "coWebsite", null) ?: ""))
         }
         fun save(ctx: Context, s: SmtpSettings) {
             ctx.getSharedPreferences("settings", Context.MODE_PRIVATE).edit()
                 .putString(P + "host", s.host.trim()).putInt(P + "port", s.port)
                 .putString(P + "user", s.user.trim()).putString(P + "password", s.password)
-                .putString(P + "from", s.from.trim()).putString(P + "fromName", s.fromName.trim()).apply()
+                .putString(P + "from", s.from.trim()).putString(P + "fromName", s.fromName.trim())
+                .putString(P + "coAddress", s.company.address.trim()).putString(P + "coPhone", s.company.phone.trim())
+                .putString(P + "coEmail", s.company.email.trim()).putString(P + "coWebsite", s.company.website.trim()).apply()
         }
     }
+}
+
+/** The exhibitor's own contact details, shown to the visitor in the thank-you mail. Entered on the Mail settings screen. */
+data class CompanyInfo(val address: String = "", val phone: String = "", val email: String = "", val website: String = "") {
+    val isEmpty get() = address.isBlank() && phone.isBlank() && email.isBlank() && website.isBlank()
 }
 
 /** Status values stored in Visitor.thankYouStatus. */
@@ -103,16 +116,13 @@ object ThankYou {
     }
 
     /** Plain-text body (fallback part of the mail), personalised from the visit. Pure function so it can be unit-tested. */
-    fun body(v: Visitor, company: String, updated: Boolean = false): String {
+    fun body(v: Visitor, company: String, updated: Boolean = false, info: CompanyInfo = CompanyInfo()): String {
         val first = v.name.trim().ifBlank { "" }
         val sb = StringBuilder()
         sb.append(if (first.isNotEmpty()) "Dear $first,\n\n" else "Dear Sir/Madam,\n\n")
         if (updated) sb.append("We have updated the details we recorded during your visit. This e-mail replaces our earlier " +
             "message; please treat it as the final version.\n\n")
-        sb.append("Thank you for visiting the $company stand")
-        if (v.attendedByName.isNotBlank()) sb.append(" and for taking the time to speak with ${v.attendedByName}")
-        sb.append(". It was a pleasure to meet")
-        sb.append(if (v.company.isNotBlank()) " you and learn about ${v.company}.\n\n" else " you.\n\n")
+        INTRO.forEach { (text, _) -> sb.append(text).append("\n\n") }
 
         val interests = Catalog.summarize(v.products.split("; ").filter { it.isNotBlank() })
         if (interests.isNotBlank() || v.additionalInterest.isNotBlank()) {
@@ -127,13 +137,55 @@ object ThankYou {
 
         sb.append("If you have any questions in the meantime, just reply to this e-mail")
         sb.append(if (v.attendedByPhone.isNotBlank()) " or call ${v.attendedByPhone.trim()}.\n\n" else ".\n\n")
-        sb.append("Warm regards,\n")
-        sb.append(v.attendedByName.ifBlank { company }).append('\n')
-        if (v.attendedByTitle.isNotBlank()) sb.append(v.attendedByTitle.trim()).append('\n')
-        sb.append(company).append('\n')
-        if (v.attendedByPhone.isNotBlank()) sb.append(v.attendedByPhone.trim()).append('\n')
-        if (v.attendedByEmail.isNotBlank()) sb.append(v.attendedByEmail.trim()).append('\n')
+        if (!info.isEmpty) {
+            sb.append("Contact us:\n").append(company).append('\n')
+            if (info.address.isNotBlank()) sb.append(info.address.trim()).append('\n')
+            if (info.phone.isNotBlank()) sb.append("Phone: ").append(info.phone.trim()).append('\n')
+            if (info.email.isNotBlank()) sb.append("E-mail: ").append(info.email.trim()).append('\n')
+            if (info.website.isNotBlank()) sb.append("Website: ").append(info.website.trim()).append('\n')
+            sb.append('\n')
+        }
+        sb.append("Warm regards,\n").append(SIGNATURE).append('\n')
         return sb.toString()
+    }
+
+    /** Fixed sign-off under "Warm regards". */
+    const val SIGNATURE = "TEAM NAREN GROUP"
+
+    /** Opening text of the mail, paragraph by paragraph; true marks a headline (bold in the HTML mail). */
+    val INTRO = listOf(
+        "A BIG THANK YOU FOR CONNECTING WITH NAREN AT INDIA ITME 2026!" to true,
+        "It was a pleasure welcoming you to the NAREN Group Pavilion at Greater Noida. We sincerely appreciate your valuable " +
+            "time, interest, and the opportunity to connect with you." to false,
+        "We believe great partnerships begin with meaningful connections and look forward to building a strong and lasting " +
+            "business relationship." to false,
+        "DISCOVER THE WORLD OF NAREN!" to true,
+        "Explore our product catalogue through the link below and discover our range of innovative textile machinery solutions." to false,
+        "Catalogue Link: To be updated shortly." to false,
+        "Thank you for being part of our journey!" to false,
+        "LET'S CONNECT, COLLABORATE & GROW TOGETHER!" to true)
+
+    /** The exhibitor's own contact block (name, address, phone, e-mail, website as links); "" when nothing was entered. */
+    internal fun companyHtml(company: String, info: CompanyInfo): String {
+        if (info.isEmpty) return ""
+        val link = "color:$AMBER_DARK;font-weight:600;text-decoration:none;"
+        val web = info.website.trim()
+        val rows = listOf(
+            "Company" to esc(company),
+            "Address" to if (info.address.isBlank()) "" else escLines(info.address),
+            "Phone" to if (info.phone.isBlank()) "" else
+                """<a href="tel:${esc(info.phone.filter { it.isDigit() || it == '+' })}" style="$link">${esc(info.phone.trim())}</a>""",
+            "E-mail" to if (info.email.isBlank()) "" else
+                """<a href="mailto:${esc(info.email.trim())}" style="$link">${esc(info.email.trim())}</a>""",
+            "Website" to if (web.isBlank()) "" else
+                """<a href="${esc(if (web.startsWith("http", ignoreCase = true)) web else "https://$web")}" style="$link">${esc(web)}</a>""")
+        val body = rows.filter { it.second.isNotBlank() }.joinToString("") { (k, html) ->
+            """<tr>
+              <td style="font-family:$FONT;padding:9px 12px 9px 0;width:36%;color:$MUTED;font-size:13px;vertical-align:top;border-bottom:1px solid $RULE;">${esc(k)}</td>
+              <td style="font-family:$FONT;padding:9px 0;color:$NAVY;font-size:14px;font-weight:600;vertical-align:top;border-bottom:1px solid $RULE;">$html</td>
+            </tr>"""
+        }
+        return """<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">$body</table>"""
     }
 
     // ------------------------------------------------------------------ HTML mail
@@ -198,21 +250,17 @@ object ThankYou {
      * Internal staff fields (discussion notes, remarks, follow-up remarks) are never included: they are not meant for the visitor.
      * [logoCid] is the Content-ID of an embedded logo, or null to show the company name as text.
      */
-    fun htmlBody(v: Visitor, company: String, logoCid: String? = null, updated: Boolean = false): String {
+    fun htmlBody(v: Visitor, company: String, logoCid: String? = null, updated: Boolean = false, info: CompanyInfo = CompanyInfo()): String {
         val name = v.name.trim()
         val visitFmt = SimpleDateFormat("EEEE, d MMMM yyyy 'at' HH:mm", Locale.getDefault())
         val year = Calendar.getInstance().get(Calendar.YEAR)
 
-        val intro = StringBuilder("Thank you for visiting the <b>${esc(company)}</b> stand")
-        if (v.attendedByName.isNotBlank()) intro.append(" and for taking the time to speak with <b>${esc(v.attendedByName.trim())}</b>")
-        intro.append(". It was a pleasure to meet you")
-        if (v.company.isNotBlank()) intro.append(" and learn about <b>${esc(v.company.trim())}</b>")
-        intro.append(". For your reference, here is a summary of the details we recorded during your visit.")
+        val intro = INTRO.joinToString("") { (text, headline) ->
+            if (headline) """<p style="margin:16px 0 8px 0;font-weight:800;color:$AMBER_DARK;letter-spacing:0.3px;">${esc(text)}</p>"""
+            else """<p style="margin:0 0 12px 0;">${esc(text)}</p>"""
+        }
 
-        val contact = details(listOf(
-            "Name" to name, "Designation" to v.title, "Company" to v.company,
-            "Phone" to v.phone, "E-mail" to (listOf(v.email) + v.extraEmailList()).filter { it.isNotBlank() }.joinToString(", "), "Website" to v.website, "Address" to v.address,
-            "State" to v.state, "Country" to v.country))
+        val contact = companyHtml(company, info)
         val profile = details(listOf("Customer type" to v.customerType, "Market" to v.marketExposure))
         val products = productsHtml(v)
         val additional = v.additionalInterest.trim()
@@ -226,11 +274,6 @@ object ThankYou {
             """<img src="cid:$logoCid" alt="${esc(company)}" width="180" style="display:block;border:0;outline:none;width:180px;max-width:60%;height:auto;">"""
         else """<div style="font-family:$FONT;font-size:22px;font-weight:800;color:$NAVY;">${esc(company)}</div>"""
 
-        val sig = listOf(
-            v.attendedByTitle.trim(), company,
-            v.attendedByPhone.trim(), v.attendedByEmail.trim()
-        ).filter { it.isNotBlank() }.joinToString("<br>") { esc(it) }
-
         val sb = StringBuilder()
         sb.append("""<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -241,7 +284,7 @@ object ThankYou {
     else "Thank you for visiting ${esc(company)}. Here is a summary of your visit."}</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:$PAGE;">
 <tr><td align="center" style="padding:24px 12px;">
-<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid $RULE;">
+<table role="presentation" width="760" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:760px;background:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid $RULE;">
   <tr><td style="padding:24px 32px 20px 32px;background:#FFFFFF;">$header</td></tr>
   <tr><td style="height:4px;line-height:4px;font-size:0;background:$AMBER;">&nbsp;</td></tr>
   <tr><td style="padding:28px 32px 0 32px;background:$NAVY;">
@@ -256,7 +299,7 @@ object ThankYou {
     ${if (updated) """<p style="margin:0 0 12px 0;padding:12px 14px;background:#FFF8EC;border-left:4px solid $AMBER;border-radius:4px;">
       We have reviewed and updated the details recorded during your visit. <b>Please treat this e-mail as the final version</b>
       and disregard the summary we sent earlier.</p>""" else ""}
-    <p style="margin:0;">$intro</p>
+    $intro
   </td></tr>
 """)
         if (next.isNotEmpty()) sb.append("""
@@ -267,7 +310,6 @@ object ThankYou {
         <div style="font-size:15px;color:$NAVY;font-weight:600;padding-top:4px;line-height:1.5;">${esc(next)}</div>
       </td></tr></table>
   </td></tr>""")
-        if (contact.isNotEmpty()) sb.append(section("Your contact details", contact))
         if (profile.isNotEmpty()) sb.append(section("Your profile", profile))
         if (products.isNotEmpty() || additional.isNotEmpty()) sb.append(section("Products of interest",
             products + (if (additional.isEmpty()) "" else
@@ -275,6 +317,7 @@ object ThankYou {
                    <div style="font-family:$FONT;font-size:14px;color:$NAVY;font-weight:600;padding-top:2px;line-height:1.5;">${escLines(additional)}</div>""")))
         if (purposes.isNotEmpty()) sb.append(section("Purpose of visit", "<div>${chips(purposes)}</div>"))
         if (visit.isNotEmpty()) sb.append(section("Your visit", visit))
+        if (contact.isNotEmpty()) sb.append(section("Contact us", contact))
         sb.append("""
   <tr><td style="padding:26px 32px 0 32px;font-family:$FONT;font-size:14px;line-height:1.6;color:$NAVY;">
     <p style="margin:0;">If any of these details need correcting, or you have questions in the meantime, simply reply to this e-mail${
@@ -282,8 +325,7 @@ object ThankYou {
   </td></tr>
   <tr><td style="padding:22px 32px 30px 32px;font-family:$FONT;font-size:14px;line-height:1.55;color:$NAVY;">
     <div style="color:$MUTED;">Warm regards,</div>
-    <div style="font-size:16px;font-weight:700;padding-top:4px;">${esc(v.attendedByName.trim().ifBlank { company })}</div>
-    <div style="color:$MUTED;font-size:13px;">$sig</div>
+    <div style="font-size:16px;font-weight:700;padding-top:4px;">$SIGNATURE</div>
   </td></tr>
   <tr><td style="padding:16px 32px;background:$NAVY;font-family:$FONT;font-size:11px;line-height:1.6;color:#9FB0C1;text-align:center;">
     You received this e-mail because you shared your business card with ${esc(company)}.<br>
@@ -350,7 +392,7 @@ object ThankYou {
             setRecipients(Message.RecipientType.TO, InternetAddress.parse(v.mailableEmails().ifEmpty { listOf(v.email.trim()) }.joinToString(","), true))
             if (isValidEmail(v.attendedByEmail)) replyTo = arrayOf(InternetAddress(v.attendedByEmail.trim(), v.attendedByName.ifBlank { null }, "UTF-8"))
             setSubject(subject(company, updated), "UTF-8")
-            setContent(content(body(v, company, updated), htmlBody(v, company, if (logo != null) LOGO_CID else null, updated), logo))
+            setContent(content(body(v, company, updated, c.company), htmlBody(v, company, if (logo != null) LOGO_CID else null, updated, c.company), logo))
         }
         Transport.send(msg)
     }
