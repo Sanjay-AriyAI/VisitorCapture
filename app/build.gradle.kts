@@ -57,6 +57,9 @@ android {
             "META-INF/DEPENDENCIES", "META-INF/LICENSE.txt", "META-INF/NOTICE.txt")
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+    // AGP 8.5's lint crashes when Gradle runs on JDK 25 (Android Studio's bundled JBR): "IllegalArgumentException: 25.0.3",
+    // then "Already disposed: MessageBus". Skip the release-only lint pass until AGP is upgraded or Gradle runs on JDK 17/21.
+    lint { checkReleaseBuilds = false }
     kotlinOptions { jvmTarget = "17" }
 }
 dependencies {
