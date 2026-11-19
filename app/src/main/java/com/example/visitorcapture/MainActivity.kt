@@ -10,9 +10,16 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.core.view.WindowCompat
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -25,6 +32,13 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -50,8 +64,9 @@ val MARKET_EXPOSURE = listOf("Domestic Visitor", "International Visitor")
 val PRODUCTS = listOf("Mechanical Spares", "Electronics Spares", "Retrofits", "Other Products")
 val LEAD_OUTCOMES = listOf("Product Enquiry", "Sample Request", "General Enquiry", "Order", "Factory Visit", "Follow-up")
 val REMARK_OPTIONS = listOf("Call Back", "Factory Visit", "Need Follow-up", "Others")
-val FOLLOW_UP_ACTIONS = listOf("Send Quotation", "Schedule Factory Visit", "Automatic E-mail Reminder", "Remarks")
 const val MAX_NOTE_PHOTOS = 5   // handwritten-enquiry images per visit
+val EXTRA_EMAIL_LABELS = listOf("Secondary e-mail", "Third e-mail")   // one per extra field, MAX_EMAILS - 1 of them
+val EXTRA_PHONE_LABELS = listOf("Secondary phone", "Third phone")     // one per extra field, MAX_PHONES - 1 of them
 val STEP_LABELS = listOf("Scan", "Details", "Customer", "Products", "Outcome", "Done")
 
 enum class Screen(val step: Int) {
@@ -61,21 +76,23 @@ enum class Screen(val step: Int) {
 data class Form(
     val name: String = "", val title: String = "", val company: String = "",
     val phone: String = "", val email: String = "",
+    val extraPhones: List<String> = emptyList(),   // secondary / third phone fields, at most MAX_PHONES - 1
+    val extraEmails: List<String> = emptyList(),   // secondary / third e-mail fields, at most MAX_EMAILS - 1
+    val website: String = "",
     val address: String = "", val state: String = "", val country: String = "",
     val customerType: String? = null, val marketExposure: String? = null,
     val products: Set<String> = emptySet(), val otherDetail: String = "",
     val outcomes: Set<String> = emptySet(), val notes: String = "",
     val remark: String? = null, val remarkOther: String = "",
-    val followUpAction: String? = null, val followUpAt: Long = 0L, val followUpNote: String = ""
-) {
-    /** The follow-up section is only shown (and saved) for these outcomes. */
-    val needsFollowUp get() = "Factory Visit" in outcomes || "Follow-up" in outcomes
-}
+    // times picked in the Factory Visit / Follow-up popup (epoch ms, 0 if none); a reminder mail goes 24 hours before
+    val factoryVisitAt: Long = 0L, val followUpAt: Long = 0L
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { MaterialTheme { App() } }
+        enableEdgeToEdge()
+        setContent { App() }
     }
 }
 
@@ -94,15 +111,24 @@ fun App() {
     var screen by remember { mutableStateOf(if (employee == null) Screen.Login else Screen.Welcome) }
     var visitStart by remember { mutableLongStateOf(0L) }                     // date/time the current visit began
     var loggedAt by remember { mutableLongStateOf(0L) }                       // visit time shown on the Done screen
-    var showAdmin by remember { mutableStateOf(false) }
-    var showMail by remember { mutableStateOf(false) }                        // Mail settings dialog on the home screen
+    var section by remember { mutableStateOf(AppPage.Visit) }                 // page picked from the side menu / gear
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val snackbar = remember { SnackbarHostState() }                          // replaces Toasts
+    var appSettings by remember { mutableStateOf(AppSettings.load(prefs)) }
+    var confirmDiscard by remember { mutableStateOf(false) }
+    var mailSuccess by remember { mutableStateOf<String?>(null) }                // "test mail sent" pop-up on the home screen
     var catalogProduct by remember { mutableStateOf("Mechanical Spares") }
     var form by remember { mutableStateOf(Form()) }
     var photoFile by remember { mutableStateOf<File?>(null) }
     var photoTaken by remember { mutableStateOf(false) }
+    // Optional photo of the back of the card: read together with the front, but never required.
+    var backFile by remember { mutableStateOf<File?>(null) }
+    var backTaken by remember { mutableStateOf(false) }
+    var shootingBack by remember { mutableStateOf(false) }                    // which side the open camera is for
     var ocrError by remember { mutableStateOf(false) }
     // Per-field "please check" notes from the card reader; a note disappears as soon as the visitor edits that field.
     var fieldHints by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var nameError by remember { mutableStateOf(false) }                       // Continue tapped with no name: show the error
     // What the scanner actually read, shown only in debug builds so a wrong field can be traced to its cause.
     var ocrRaw by remember { mutableStateOf("") }
     var showRaw by remember { mutableStateOf(false) }
@@ -135,17 +161,24 @@ fun App() {
         persistExtra()
         lastUid = null; extraNote = ""; extraSaved = ""
         notePhotos = emptyList(); pendingNote = null; noteBusy = false; noteError = null
-        form = Form(); photoFile = null; photoTaken = false; ocrError = false; fieldHints = emptyMap(); visitStart = 0L; screen = Screen.Welcome
+        form = Form(); photoFile = null; photoTaken = false; backFile = null; backTaken = false
+        ocrError = false; fieldHints = emptyMap(); nameError = false; visitStart = 0L; screen = Screen.Welcome
+    }
+
+    /** Manual entry: forget any card photos taken for this visit. */
+    fun dropPhotos() {
+        photoFile = null; photoTaken = false; backFile = null; backTaken = false; ocrError = false; fieldHints = emptyMap()
     }
 
     fun runOcr(file: File) {
         screen = Screen.Processing
+        val back = if (backTaken) backFile else null
         scope.launch {
-            val p = try { withContext(Dispatchers.Default) { CardReader.read(ctx, file) } } catch (e: Exception) { null }
+            val p = try { withContext(Dispatchers.Default) { CardReader.read(ctx, file, back) } } catch (e: Exception) { null }
             if (p == null) { ocrError = true; fieldHints = emptyMap() }
             else {
-                form = form.copy(name = p.name, title = p.title, company = p.company, phone = p.phone, email = p.email,
-                    address = p.address, state = p.state, country = p.country)
+                form = form.copy(name = p.name, title = p.title, company = p.company, phone = p.phone, extraPhones = p.extraPhones, email = p.email, extraEmails = p.extraEmails, website = p.website,
+                    address = p.address, state = p.state, country = p.country.ifBlank { appSettings.defaultCountry.trim() })
                 fieldHints = p.flags; ocrError = false; ocrRaw = p.raw
             }
             screen = Screen.Details
@@ -153,18 +186,39 @@ fun App() {
     }
 
     val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
-        if (ok) photoTaken = true else { photoFile = null; photoTaken = false }
+        if (shootingBack) { if (ok) backTaken = true else { backFile = null; backTaken = false } }
+        else if (ok) photoTaken = true else { photoFile = null; photoTaken = false }
     }
     fun launchCamera() {
         val dir = File(ctx.filesDir, "cards").apply { mkdirs() }
-        val f = File(dir, "card_${System.currentTimeMillis()}.jpg")
-        photoFile = f; photoTaken = false
+        val f = File(dir, "card_${System.currentTimeMillis()}${if (shootingBack) "_back" else ""}.jpg")
+        if (shootingBack) { backFile = f; backTaken = false } else { photoFile = f; photoTaken = false }
         takePicture.launch(FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", f))
     }
     val camPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) launchCamera() }
-    fun openCamera() {
+    /** Plain system camera: used only when the document scanner cannot run on this device. */
+    fun openSystemCamera() {
         if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchCamera()
         else camPerm.launch(Manifest.permission.CAMERA)
+    }
+    // Document scanner result: the cropped, straightened card is copied into the same cards/ file the camera would use.
+    val scanCard = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { res ->
+        val back = shootingBack
+        val dir = File(ctx.filesDir, "cards").apply { mkdirs() }
+        val f = File(dir, "card_${System.currentTimeMillis()}${if (back) "_back" else ""}.jpg")
+        scope.launch {
+            val ok = res.resultCode == android.app.Activity.RESULT_OK &&
+                withContext(Dispatchers.IO) { CardScanner.copyResult(ctx, res.data, f) }
+            if (back) { if (ok) { backFile = f; backTaken = true } else { backFile = null; backTaken = false } }
+            else if (ok) { photoFile = f; photoTaken = true } else { photoFile = null; photoTaken = false }
+        }
+    }
+    /** Opens the card scanner for the front of the card, or for the optional back when [back] is true. */
+    fun openCamera(back: Boolean = false) {
+        shootingBack = back
+        val activity = ctx as? ComponentActivity
+        if (activity == null) openSystemCamera()
+        else CardScanner.start(activity, scanCard) { openSystemCamera() }
     }
 
     // Note images live next to the card photos (cards/ is already shared with the camera via the FileProvider).
@@ -240,30 +294,41 @@ fun App() {
         val at = if (visitStart > 0L) visitStart else System.currentTimeMillis()   // date and time of the visit
         loggedAt = at
         val e = employee
-        // Fields of hidden sections are dropped, so a changed mind never leaves stale values behind.
-        val follow = if (form.needsFollowUp) form.followUpAction else null
+        // A time only counts while its tile is ticked, so a changed mind never leaves a stale reminder behind.
+        val factoryAt = if (Reminder.FACTORY.outcome in form.outcomes) form.factoryVisitAt else 0L
+        val followAt = if (Reminder.FOLLOW_UP.outcome in form.outcomes) form.followUpAt else 0L
         val uidPrefix = UidGen.prefix(e?.name.orEmpty(), deviceName, at)
+        val (mainEmail, extraEmails) = splitEmails(form.email, form.extraEmails)
+        val (mainPhone, extraPhones) = splitPhones(form.phone, form.extraPhones)
         val v = Visitor(uid = uidPrefix, deviceName = deviceName,
-            name = form.name, title = form.title, company = form.company, email = form.email, phone = form.phone,
+            name = form.name, title = form.title, company = form.company, email = mainEmail, extraEmails = extraEmails, website = form.website.trim(),
+            phone = mainPhone, extraPhones = extraPhones,
             address = form.address.trim(), state = form.state.trim(), country = form.country.trim(),
             customerType = form.customerType ?: "", marketExposure = form.marketExposure ?: "",
             products = form.products.joinToString("; "),
             otherDetail = form.otherDetail, cardPhotoPath = if (photoTaken) photoFile?.absolutePath else null,
+            cardBackPhotoPath = if (photoTaken && backTaken) backFile?.absolutePath else null,
             createdAt = at,
             attendedByKey = e?.key.orEmpty(), attendedByName = e?.name.orEmpty(), attendedByTitle = e?.title.orEmpty(),
             attendedByEmail = e?.email.orEmpty(), attendedByPhone = e?.phone.orEmpty(),
             leadOutcomes = LEAD_OUTCOMES.filter { it in form.outcomes }.joinToString("; "),
             discussionNotes = form.notes.trim(), remarks = form.remark.orEmpty(),
             remarksOther = if (form.remark == "Others") form.remarkOther.trim() else "",
-            followUpAction = follow.orEmpty(),
-            followUpAt = if (follow != null && follow != "Remarks") form.followUpAt else 0L,
-            followUpNote = if (follow == "Remarks") form.followUpNote.trim() else "",
-            thankYouStatus = ThankYou.initialStatus(form.email))
+            factoryVisitAt = factoryAt, followUpAt = followAt,
+            thankYouStatus = ThankYou.initialStatus(mainEmail)).let {
+                it.copy(factoryReminderStatus = Reminder.initialStatus(factoryAt, it),
+                    followUpReminderStatus = Reminder.initialStatus(followAt, it))
+            }
+        // "Send automatically" (Settings) queues the mail straight away; otherwise it waits (PENDING) for the Mail settings button.
+        val autoSend = appSettings.autoThankYou && v.thankYouStatus == ThankYou.PENDING && SmtpSettings.load(ctx).complete
         extraNote = ""; extraSaved = ""
-        scope.launch {   // the thank-you mail waits (PENDING) until staff press "Send thank-you mails"
+        scope.launch {
             val uid = UidGen.withSeq(uidPrefix, db.dao().countUidPrefix(uidPrefix))
             lastUid = uid
-            db.dao().insert(v.copy(uid = uid))
+            val saved = v.copy(uid = uid, thankYouStatus = if (autoSend) ThankYou.QUEUED else v.thankYouStatus)
+            db.dao().insert(saved)
+            if (autoSend) ThankYouWorker.enqueue(ctx)
+            Reminders.schedule(ctx, saved)   // 24-hour reminder mails, sent in the background even if the app is closed
         }
     }
 
@@ -278,9 +343,29 @@ fun App() {
         if (screen == Screen.Login) screen = Screen.Welcome
     }
 
-    fun exportData() {
+    /** Profile edited: remember it on this phone, then update the staff record and the visits they attended here. */
+    fun editProfile(updated: EmployeeInfo) {
+        val old = employee ?: return
+        saveEmployee(prefs, updated)
+        employee = updated
         scope.launch {
-            val f = withContext(Dispatchers.IO) { Sync.exportZip(ctx, visitors, deviceName) }
+            try {
+                db.employeeDao().edit(old.key, updated.key, updated.name, updated.title, updated.company, updated.email, updated.phone)
+            } catch (e: android.database.sqlite.SQLiteConstraintException) {
+                // the new e-mail already belongs to another saved staff record: refresh that one instead
+                db.employeeDao().touch(updated.key, updated.name, updated.title, updated.company, updated.email,
+                    updated.phone, updated.raw, System.currentTimeMillis())
+            }
+            db.dao().renameStaff(old.key, updated.key, updated.name, updated.title, updated.email, updated.phone)
+        }
+        scope.launch { snackbar.showSnackbar("Profile updated") }
+    }
+
+    /** Zip [list] (all visitors, or those in [range]) and open the share sheet. */
+    fun exportData(list: List<Visitor> = visitors, range: DateRange? = null) {
+        if (list.isEmpty()) { scope.launch { snackbar.showSnackbar("No visitors to export") }; return }
+        scope.launch {
+            val f = withContext(Dispatchers.IO) { Sync.exportZip(ctx, list, employee?.name.orEmpty(), deviceName, range) }
             val uri = FileProvider.getUriForFile(ctx, "${ctx.packageName}.fileprovider", f)
             ctx.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
                 type = "application/zip"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -292,12 +377,39 @@ fun App() {
     // Save the note shortly after the last keystroke (reset() also saves it, so nothing is lost).
     LaunchedEffect(extraNote) { delay(700); persistExtra() }
 
-    BackHandler(enabled = showAdmin || (screen != Screen.Welcome && !(screen == Screen.Login && employee == null))) {
-        if (showAdmin) showAdmin = false
+    // ---- side menu, settings and page switching ----
+    val menuAvailable = employee != null && screen != Screen.Login
+    val midVisit = screen !in setOf(Screen.Login, Screen.Welcome, Screen.Done)
+    val mailConfigured = remember(section, visitors) { SmtpSettings.load(ctx).complete }
+    fun go(s: AppPage) { section = s; scope.launch { drawerState.close() } }
+    fun startNewVisit() {
+        scope.launch { drawerState.close() }
+        if (midVisit && appSettings.confirmAbandon) confirmDiscard = true else { reset(); section = AppPage.Visit }
+    }
+    fun switchUser() { section = AppPage.Visit; screen = Screen.Login; scope.launch { drawerState.close() } }
+    fun startVisit(manual: Boolean) {
+        visitStart = System.currentTimeMillis()
+        if (form.country.isBlank()) form = form.copy(country = appSettings.defaultCountry.trim())
+        if (manual) { dropPhotos(); screen = Screen.Details }
+        else screen = Screen.Capture
+    }
+    // Back from Details returns to the camera, unless the visit started with manual entry ("Skip card scan").
+    val detailsBack = if (appSettings.skipScan && !photoTaken) Screen.Welcome else Screen.Capture
+
+    val view = androidx.compose.ui.platform.LocalView.current
+    DisposableEffect(appSettings.keepAwake) {
+        view.keepScreenOn = appSettings.keepAwake
+        onDispose { view.keepScreenOn = false }
+    }
+
+    BackHandler(enabled = drawerState.isOpen || section != AppPage.Visit ||
+        (screen != Screen.Welcome && !(screen == Screen.Login && employee == null))) {
+        if (drawerState.isOpen) scope.launch { drawerState.close() }
+        else if (section != AppPage.Visit) section = AppPage.Visit
         else when (screen) {
             Screen.Login -> screen = Screen.Welcome
             Screen.Capture -> screen = Screen.Welcome
-            Screen.Details -> screen = Screen.Capture
+            Screen.Details -> screen = detailsBack
             Screen.Customer -> screen = Screen.Details
             Screen.Products -> screen = Screen.Customer
             Screen.Catalog -> screen = Screen.Products
@@ -307,113 +419,268 @@ fun App() {
         }
     }
 
-    CompositionLocalProvider(LocalContentColor provides LineC) {
-        Box(Modifier.fillMaxSize().background(Navy).systemBarsPadding()) {
+    // ---- appearance: theme + status/navigation bar icons that match it ----
+    val dark = resolveDark(appSettings.theme, isSystemInDarkTheme())
+    SideEffect {
+        val window = (ctx as? android.app.Activity)?.window ?: return@SideEffect
+        WindowCompat.getInsetsController(window, view).apply {
+            isAppearanceLightStatusBars = !dark; isAppearanceLightNavigationBars = !dark
+        }
+    }
+
+    VisitorTheme(dark) {
+    CompositionLocalProvider(LocalContentColor provides LineC, LocalSnackbar provides snackbar) {
+      ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = drawerState.isOpen,   // swipe closes it; an edge swipe never opens it by accident mid-visit
+        scrimColor = NavyDeep.copy(alpha = 0.6f),
+        drawerContent = {
+            AppDrawer(section, employee, deviceName, visitorCount = visitors.size,
+                mailPending = visitors.count { it.thankYouStatus == ThankYou.PENDING }, mailConfigured = mailConfigured,
+                visitInProgress = midVisit || screen == Screen.Done,
+                onSelect = { go(it) }, onNewVisit = { startNewVisit() }, onSwitchUser = { switchUser() })
+        }) {
+        Box(Modifier.fillMaxSize().background(Navy).systemBarsPadding().imePadding()) {   // content shrinks above the keyboard
+         Column(Modifier.fillMaxSize()) {
+          AnimatedContent(section, Modifier.weight(1f).fillMaxWidth(), label = "section", transitionSpec = {
+              val dir = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+              (fadeIn(tween(220)) + slideInHorizontally(tween(260)) { dir * it / 8 }) togetherWith fadeOut(tween(140))
+          }) { page -> when (page) {
+            AppPage.Profile -> ProfileScreen(employee, visitors, onSwitchUser = { switchUser() },
+                onEdit = { updated -> editProfile(updated) }, onBack = { section = AppPage.Visit })
+            AppPage.Logs -> VisitorLogScreen(visitors, onBack = { section = AppPage.Visit },
+                onExport = { list, range -> exportData(list, range) }, onImport = { importPicker.launch(arrayOf("*/*")) },
+                onEdit = { edited ->
+                    // Already mailed and the visitor-facing details changed: send the "updated, final version" mail.
+                    val old = visitors.find { it.uid == edited.uid }
+                    val resend = old != null && ThankYou.needsUpdateMail(old, edited)
+                    val auto = resend && appSettings.autoThankYou && SmtpSettings.load(ctx).complete
+                    val v = if (resend) edited.copy(thankYouStatus = if (auto) ThankYou.QUEUED else ThankYou.PENDING) else edited
+                    scope.launch {
+                        db.dao().update(v)
+                        if (auto) ThankYouWorker.enqueue(ctx)
+                        Reminders.schedule(ctx, v)   // re-arms a changed factory visit / follow-up time, disarms a removed one
+                        if (resend) snackbar.showSnackbar(if (auto) "Saved. Updated mail will be sent to ${v.mailableEmails().joinToString(", ")}"
+                            else "Saved. Updated mail is waiting in Mail settings")
+                    }
+                },
+                onDelete = { v ->
+                    // Removed at once with an Undo; photos are only deleted once the snackbar goes away without Undo.
+                    scope.launch {
+                        db.dao().delete(v)
+                        snackbar.currentSnackbarData?.dismiss()
+                        val r = snackbar.showSnackbar("${v.name.ifBlank { "Visitor" }} deleted", actionLabel = "Undo",
+                            duration = SnackbarDuration.Long)
+                        if (r == SnackbarResult.ActionPerformed) db.dao().insert(v)
+                        else withContext(Dispatchers.IO) { v.cardPhotoPath?.let { File(it).delete() }; v.cardBackPhotoPath?.let { File(it).delete() }; Sync.notePhotos(v).forEach { it.delete() } }
+                    }
+                },
+                onClear = { scope.launch { db.dao().clear(); File(ctx.filesDir, "cards").deleteRecursively() } },
+                onRetryThankYou = { v ->
+                    scope.launch {
+                        if (ThankYou.isValidEmail(v.email)) { db.dao().setThankYouStatus(v.uid, ThankYou.QUEUED); ThankYouWorker.enqueue(ctx) }
+                    }
+                })
+            AppPage.Mail -> MailSettingsScreen(visitors, onBack = { section = AppPage.Visit }, onSaved = { msg, tested ->
+                section = AppPage.Visit                                   // back to the home screen
+                if (tested) mailSuccess = msg else scope.launch { snackbar.showSnackbar(msg) }
+            })
+            AppPage.Settings -> SettingsScreen(deviceName,
+                onDeviceName = { deviceName = it; prefs.edit().putString("device", it).apply() },
+                settings = appSettings, onChange = { appSettings = it; it.save(prefs) },
+                mailConfigured = mailConfigured, onOpen = { section = it }, onBack = { section = AppPage.Visit })
+            AppPage.About -> AboutScreen(deviceName, visitors.size, onBack = { section = AppPage.Visit })
+            AppPage.Visit ->
             Column(Modifier.fillMaxSize()) {
-                ProgressRail(screen.step, STEP_LABELS, employee?.name) {
-                    IconButton({ showAdmin = true }) { Icon(Icons.Default.Settings, "Staff view", tint = Steel) }
+                ProgressRail(screen.step, STEP_LABELS, employee?.name,
+                    leading = {
+                        if (menuAvailable) IconButton({ scope.launch { drawerState.open() } }) {
+                            Icon(Icons.Default.Menu, "Open menu", tint = LineC)
+                        }
+                    }) {
+                    if (menuAvailable) IconButton({ section = AppPage.Settings }) { Icon(Icons.Default.Settings, "Settings", tint = Steel) }
                 }
                 Box(Modifier.weight(1f).fillMaxWidth()) {
-                    when (screen) {
+                  // Each step slides in from the side it comes from: forward from the right, back from the left.
+                  AnimatedContent(screen, label = "visit", transitionSpec = {
+                      val fwd = targetState.ordinal >= initialState.ordinal
+                      (slideInHorizontally(tween(340, easing = FastOutSlowInEasing)) { if (fwd) it / 4 else -it / 4 } +
+                          fadeIn(tween(260, 60))) togetherWith
+                          (slideOutHorizontally(tween(300, easing = FastOutSlowInEasing)) { if (fwd) -it / 6 else it / 6 } +
+                              fadeOut(tween(160)))
+                  }) { current ->
+                    when (current) {
                         Screen.Login -> LoginScreen(employee, onLogin = { signIn(it) },
                             onCancel = if (employee != null) ({ screen = Screen.Welcome }) else null)
 
-                        Screen.Welcome -> Centered {
-                            NarenLogo(Modifier.width(260.dp))
-                            Text("Welcome to\nour stand", fontSize = 44.sp, fontWeight = FontWeight.Bold,
-                                fontFamily = Display, textAlign = TextAlign.Center, lineHeight = 46.sp)
-                            Text("Scan your business card and we'll log your visit & interests in under a minute.",
-                                color = Steel, textAlign = TextAlign.Center)
-                            PrimaryButton("Scan business card") { visitStart = System.currentTimeMillis(); screen = Screen.Capture }
-                            employee?.let { e ->
-                                Text("Attended by ${e.name}" + if (e.title.isNotBlank()) ", ${e.title}" else "",
-                                    color = Amber, fontSize = 14.sp, textAlign = TextAlign.Center)
-                                LinkButton("Not you? Switch user") { screen = Screen.Login }
-                            }
-                            // Thank-you mails: nothing is sent on its own; staff press the button and the mails go out once online.
-                            val unsent = visitors.count { it.thankYouStatus == ThankYou.PENDING }
-                            val queued = visitors.count { it.thankYouStatus == ThankYou.QUEUED }
-                            val failed = visitors.count { it.thankYouStatus == ThankYou.FAILED }
-                            if (unsent > 0 || queued > 0 || failed > 0) {
-                                Text(listOf("$unsent to send", "$queued queued", "$failed failed").filterIndexed { i, _ -> intArrayOf(unsent, queued, failed)[i] > 0 }
-                                    .joinToString(" · ") + " (thank-you mails)", color = Steel, fontSize = 13.sp, textAlign = TextAlign.Center)
-                            }
-                            if (unsent > 0) SecondaryButton("Send thank-you mails ($unsent)") {
-                                if (!SmtpSettings.load(ctx).complete) {
-                                    android.widget.Toast.makeText(ctx, "Enter the mail settings first", android.widget.Toast.LENGTH_LONG).show()
-                                    showMail = true
-                                } else scope.launch {
-                                    val n = db.dao().queueAllThankYou()
-                                    ThankYouWorker.enqueue(ctx)
-                                    android.widget.Toast.makeText(ctx, "$n thank-you mail(s) queued. They send as soon as the phone is online.",
-                                        android.widget.Toast.LENGTH_LONG).show()
+                        Screen.Welcome -> Box(Modifier.fillMaxSize()) {
+                            // soft amber glow behind the hero
+                            Box(Modifier.matchParentSize().background(Brush.radialGradient(
+                                listOf(Amber.copy(alpha = if (IsDark) 0.18f else 0.14f), androidx.compose.ui.graphics.Color.Transparent),
+                                radius = 720f)))
+                            Centered {
+                                NarenLogo(Modifier.width(220.dp))
+                                Text("Welcome to\nour stand", style = MaterialTheme.typography.displayMedium,
+                                    textAlign = TextAlign.Center, color = LineC)
+                                Text("Scan your business card and we'll log your visit & interests in under a minute.",
+                                    color = Steel, textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyLarge)
+                                if (appSettings.skipScan) {
+                                    PrimaryButton("Enter visitor details", icon = Icons.Default.EditNote) { startVisit(manual = true) }
+                                    LinkButton("Scan a business card instead") { startVisit(manual = false) }
+                                } else PrimaryButton("Scan business card", icon = Icons.Default.CameraAlt) { startVisit(manual = false) }
+                                // at-a-glance numbers for staff; the mail tile opens Mail settings
+                                val today = remember(visitors) { startOfToday() }
+                                val unsent = visitors.count { it.thankYouStatus == ThankYou.PENDING }
+                                val failed = visitors.count { it.thankYouStatus == ThankYou.FAILED }
+                                Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    StatChip("Today", visitors.count { it.createdAt >= today }, Modifier.weight(1f)) {
+                                        section = AppPage.Logs
+                                    }
+                                    StatChip("All visitors", visitors.size, Modifier.weight(1f)) { section = AppPage.Logs }
+                                    StatChip(if (failed > 0) "$failed mail failed" else "Mails to send", unsent + failed,
+                                        Modifier.weight(1f), highlight = unsent + failed > 0) {
+                                        section = AppPage.Mail
+                                    }
                                 }
                             }
-                            LinkButton("Mail settings") { showMail = true }
-                            if (showMail) MailSettingsDialog(onDone = { showMail = false })
                         }
 
                         Screen.Capture -> Centered {
-                            Text("Photograph the card", fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
-                            Text("Lay it flat, good light, fill the frame.", color = Steel)
-                            Box(Modifier.fillMaxWidth().aspectRatio(1.6f).clip(RoundedCornerShape(10.dp))
-                                .background(Panel).border(2.dp, LineDim, RoundedCornerShape(10.dp)),
-                                contentAlignment = Alignment.Center) {
+                            Text(if (photoTaken) "Front side captured" else "Photograph the front", style = MaterialTheme.typography.headlineMedium, color = LineC)
+                            Text(if (photoTaken) "Add the back too if it has more details. It's optional."
+                                else "Lay it flat, good light, fill the frame.", color = Steel, textAlign = TextAlign.Center)
+                            Box(Modifier.fillMaxWidth().aspectRatio(1.6f).clip(CardShape)
+                                .background(if (IsDark) NavyDeep else androidx.compose.ui.graphics.Color(0xFFE6EBF1))
+                                .viewfinder(Amber), contentAlignment = Alignment.Center) {
                                 if (photoTaken && photoFile != null)
-                                    AsyncImage(photoFile, "Card", Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                                else Text("No photo yet", color = Steel)
+                                    AsyncImage(photoFile, "Card", Modifier.fillMaxSize().padding(16.dp), contentScale = ContentScale.Fit)
+                                else Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Icon(Icons.Default.CreditCard, null, tint = Steel, modifier = Modifier.size(44.dp))
+                                    Text("No photo yet", color = Steel)
+                                }
+                            }
+                            // Optional back side: only offered once the front is in.
+                            if (photoTaken) Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                                .border(1.dp, Steel.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                                .clickable { openCamera(back = true) }.padding(10.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.width(88.dp).aspectRatio(1.6f).clip(RoundedCornerShape(8.dp))
+                                    .background(if (IsDark) NavyDeep else androidx.compose.ui.graphics.Color(0xFFE6EBF1)),
+                                    contentAlignment = Alignment.Center) {
+                                    if (backTaken && backFile != null)
+                                        AsyncImage(backFile, "Back of card", Modifier.fillMaxSize().padding(4.dp), contentScale = ContentScale.Fit)
+                                    else Icon(Icons.Default.AddAPhoto, null, tint = Steel, modifier = Modifier.size(26.dp))
+                                }
+                                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                    Text(if (backTaken) "Back side added" else "Add back side", color = LineC, fontWeight = FontWeight.SemiBold)
+                                    Text(if (backTaken) "Tap to retake" else "Optional", color = Steel, fontSize = 13.sp)
+                                }
+                                if (backTaken) IconButton({ backFile?.delete(); backFile = null; backTaken = false }) {
+                                    Icon(Icons.Default.Close, "Remove back side", tint = Steel)
+                                }
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                SecondaryButton("Back") { screen = Screen.Welcome }
-                                if (photoTaken) PrimaryButton("Use this photo") { photoFile?.let { runOcr(it) } }
-                                else PrimaryButton("Open camera") { openCamera() }
+                                SecondaryButton("Back", icon = Icons.AutoMirrored.Filled.ArrowBack) { screen = Screen.Welcome }
+                                if (photoTaken) PrimaryButton(if (backTaken) "Use photos" else "Use photo", icon = Icons.Default.Check) { photoFile?.let { runOcr(it) } }
+                                else PrimaryButton("Open camera", icon = Icons.Default.CameraAlt) { openCamera() }
                             }
-                            if (photoTaken) LinkButton("Retake") { openCamera() }
-                            LinkButton("Skip scan, enter details manually") { photoFile = null; photoTaken = false; ocrError = false; fieldHints = emptyMap(); screen = Screen.Details }
+                            if (photoTaken) LinkButton("Retake front") { openCamera() }
+                            LinkButton("Skip scan, enter details manually") { dropPhotos(); screen = Screen.Details }
                         }
 
                         Screen.Processing -> Centered {
-                            CircularProgressIndicator(color = Amber)
-                            Text("Reading the card…", color = Steel)
+                            Box(Modifier.fillMaxWidth().aspectRatio(1.6f).clip(CardShape).background(NavyDeep)
+                                .scanSweep(Amber).viewfinder(Amber), contentAlignment = Alignment.Center) {
+                                photoFile?.let { AsyncImage(it, "Card", Modifier.fillMaxSize().padding(16.dp), contentScale = ContentScale.Fit, alpha = 0.85f) }
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(20.dp), color = Amber, strokeWidth = 2.5.dp)
+                                Spacer(Modifier.width(12.dp))
+                                Text(if (backTaken) "Reading both sides…" else "Reading the card…", style = MaterialTheme.typography.titleMedium, color = LineC)
+                            }
+                            Text("Name, company, phone and e-mail are picked up automatically.", color = Steel, textAlign = TextAlign.Center)
                         }
 
                         Screen.Details -> Scrolling {
-                            if (ocrError) Text("Couldn't auto-read the card. Fields left blank, just fill them in.",
-                                color = Color_F0C3B8, modifier = Modifier.fillMaxWidth().clip(Shape6)
-                                    .background(Danger.copy(alpha = 0.15f)).border(1.dp, Danger, Shape6).padding(12.dp))
-                            CompositionLocalProvider(LocalContentColor provides PaperInk) {
-                                Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(Paper).padding(22.dp),
-                                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    Text("Confirm details", fontSize = 24.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
-                                    Text("We prefilled what we could read. Fix anything that's off.", fontSize = 13.sp, color = PaperInk.copy(alpha = 0.6f))
-                                    if (photoTaken && photoFile != null)
-                                        AsyncImage(photoFile, "Card", Modifier.width(140.dp).aspectRatio(1.6f).clip(RoundedCornerShape(5.dp)),
-                                            contentScale = ContentScale.Crop)
-                                    // Debug-only "show scanned text" toggle, disabled for now.
-                                    // if (isDebugBuild && ocrRaw.isNotEmpty()) {
-                                    //     TextButton(onClick = { showRaw = !showRaw }) {
-                                    //         Text(if (showRaw) "Hide scanned text (debug)" else "Show scanned text (debug)", color = PaperHint, fontSize = 12.sp)
-                                    //     }
-                                    //     if (showRaw) Text(ocrRaw, fontSize = 11.sp, color = PaperInk.copy(alpha = 0.8f),
-                                    //         modifier = Modifier.fillMaxWidth().background(PaperLine.copy(alpha = 0.3f)).padding(8.dp))
-                                    // }
-                                    if (fieldHints.isNotEmpty()) Text("Fields marked in amber need a quick check against the card.",
-                                        fontSize = 12.sp, color = PaperHint)
-                                    PaperField("Full name", form.name, hint = fieldHints["name"]) { form = form.copy(name = it); fieldHints = fieldHints - "name" }
-                                    PaperField("Job title", form.title, hint = fieldHints["title"]) { form = form.copy(title = it); fieldHints = fieldHints - "title" }
-                                    PaperField("Company", form.company, hint = fieldHints["company"]) { form = form.copy(company = it); fieldHints = fieldHints - "company" }
-                                    PaperField("Phone", form.phone, hint = fieldHints["phone"]) { form = form.copy(phone = it); fieldHints = fieldHints - "phone" }
-                                    PaperField("Email", form.email, hint = fieldHints["email"]) { form = form.copy(email = it); fieldHints = fieldHints - "email" }
-                                    PaperField("Address", form.address, singleLine = false, hint = fieldHints["address"]) { form = form.copy(address = it); fieldHints = fieldHints - "address" }
-                                    PaperField("State / Province", form.state, hint = fieldHints["state"]) { form = form.copy(state = it); fieldHints = fieldHints - "state" }
-                                    PaperField("Country (if applicable)", form.country) { form = form.copy(country = it) }
+                            // header: title + the scanned card, if there is one
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text("Confirm details", style = MaterialTheme.typography.headlineMedium, color = LineC)
+                                    Text(if (photoTaken) "We prefilled what we could read. Fix anything that's off."
+                                        else "Type in the visitor's details.", fontSize = 14.sp, color = Steel)
+                                }
+                                if (photoTaken && photoFile != null) {
+                                    Spacer(Modifier.width(12.dp))
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        AsyncImage(photoFile, "Scanned card, front", Modifier.width(96.dp).aspectRatio(1.6f).clip(RoundedCornerShape(10.dp))
+                                            .border(1.5.dp, Amber.copy(alpha = 0.6f), RoundedCornerShape(10.dp)).padding(3.dp), contentScale = ContentScale.Fit)
+                                        if (backTaken && backFile != null)
+                                            AsyncImage(backFile, "Scanned card, back", Modifier.width(96.dp).aspectRatio(1.6f).clip(RoundedCornerShape(10.dp))
+                                                .border(1.5.dp, Amber.copy(alpha = 0.6f), RoundedCornerShape(10.dp)).padding(3.dp), contentScale = ContentScale.Fit)
+                                    }
+                                }
+                            }
+                            if (ocrError) Notice(Icons.Default.ErrorOutline, "Couldn't auto-read the card. Fields are blank, just fill them in.", Danger, Color_F0C3B8)
+                            if (fieldHints.isNotEmpty()) Notice(Icons.Default.Info, "Fields outlined in amber need a quick check against the card.", Amber, AmberText)
+
+                            FormSection("Person", Icons.Default.Person) {
+                                PaperField("Full name *", form.name, Icons.Default.Badge, hint = fieldHints["name"], caps = KeyboardCapitalization.Words,
+                                    error = if (nameError && form.name.isBlank()) "Name is required" else null) { form = form.copy(name = it); fieldHints = fieldHints - "name" }
+                                PaperField("Job title", form.title, Icons.Default.Work, hint = fieldHints["title"], caps = KeyboardCapitalization.Words) { form = form.copy(title = it); fieldHints = fieldHints - "title" }
+                            }
+                            FormSection("Company & contact", Icons.Default.Business) {
+                                PaperField("Company", form.company, Icons.Default.Apartment, hint = fieldHints["company"], caps = KeyboardCapitalization.Words) { form = form.copy(company = it); fieldHints = fieldHints - "company" }
+                                PaperField("Phone", form.phone, Icons.Default.Phone, hint = fieldHints["phone"], keyboard = KeyboardType.Phone) { form = form.copy(phone = it); fieldHints = fieldHints - "phone" }
+                                // Extra numbers: filled when the card shows more than one, or added by hand (max MAX_PHONES in all).
+                                form.extraPhones.forEachIndexed { i, num ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        PaperField(EXTRA_PHONE_LABELS[i], num, Icons.Default.Call, Modifier.weight(1f), keyboard = KeyboardType.Phone) { v ->
+                                            form = form.copy(extraPhones = form.extraPhones.toMutableList().also { it[i] = v })
+                                        }
+                                        IconButton({ form = form.copy(extraPhones = form.extraPhones.filterIndexed { j, _ -> j != i }) }) {
+                                            Icon(Icons.Default.Close, "Remove ${EXTRA_PHONE_LABELS[i].lowercase()}", tint = Steel)
+                                        }
+                                    }
+                                }
+                                if (form.extraPhones.size < MAX_PHONES - 1)
+                                    LinkButton(if (form.extraPhones.isEmpty()) "+ Add secondary phone" else "+ Add another phone") {
+                                        form = form.copy(extraPhones = form.extraPhones + "")
+                                    }
+                                PaperField("E-mail", form.email, Icons.Default.Email, hint = fieldHints["email"], keyboard = KeyboardType.Email) { form = form.copy(email = it); fieldHints = fieldHints - "email" }
+                                // Extra addresses: filled when the card shows more than one, or added by hand (max MAX_EMAILS in all).
+                                form.extraEmails.forEachIndexed { i, mail ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        PaperField(EXTRA_EMAIL_LABELS[i], mail, Icons.Default.AlternateEmail, Modifier.weight(1f), keyboard = KeyboardType.Email) { v ->
+                                            form = form.copy(extraEmails = form.extraEmails.toMutableList().also { it[i] = v })
+                                        }
+                                        IconButton({ form = form.copy(extraEmails = form.extraEmails.filterIndexed { j, _ -> j != i }) }) {
+                                            Icon(Icons.Default.Close, "Remove ${EXTRA_EMAIL_LABELS[i].lowercase()}", tint = Steel)
+                                        }
+                                    }
+                                }
+                                if (form.extraEmails.size < MAX_EMAILS - 1)
+                                    LinkButton(if (form.extraEmails.isEmpty()) "+ Add secondary e-mail" else "+ Add another e-mail") {
+                                        form = form.copy(extraEmails = form.extraEmails + "")
+                                    }
+                                PaperField("Website", form.website, Icons.Default.Language, hint = fieldHints["website"], keyboard = KeyboardType.Uri) {
+                                    form = form.copy(website = it); fieldHints = fieldHints - "website"
+                                }
+                            }
+                            FormSection("Location", Icons.Default.Place) {
+                                PaperField("Address", form.address, Icons.Default.Home, singleLine = false, hint = fieldHints["address"], caps = KeyboardCapitalization.Words) { form = form.copy(address = it); fieldHints = fieldHints - "address" }
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    PaperField("State", form.state, null, Modifier.weight(1f), hint = fieldHints["state"], caps = KeyboardCapitalization.Words) { form = form.copy(state = it); fieldHints = fieldHints - "state" }
+                                    PaperField("Country", form.country, null, Modifier.weight(1f), caps = KeyboardCapitalization.Words, last = true) { form = form.copy(country = it) }
                                 }
                             }
                             NavRow(
-                                { SecondaryButton("Back") { screen = Screen.Capture } },
-                                { PrimaryButton("Continue") { screen = Screen.Customer } })
+                                { SecondaryButton("Back", icon = Icons.AutoMirrored.Filled.ArrowBack) { screen = detailsBack } },
+                                { PrimaryButton("Continue", trailingIcon = Icons.AutoMirrored.Filled.ArrowForward) {
+                                    // the visitor's name is mandatory
+                                    if (form.name.isBlank()) { nameError = true; scope.launch { snackbar.showSnackbar("Enter the visitor's full name to continue") } }
+                                    else { nameError = false; screen = Screen.Customer }
+                                } })
                         }
-
                         Screen.Customer -> Scrolling {
                             Text("Customer profile", fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
                             Text("CUSTOMER TYPE", fontSize = 12.sp, color = Steel, letterSpacing = 1.sp)
@@ -467,14 +734,15 @@ fun App() {
 
                         Screen.Done -> Centered {
                             val first = form.name.split(" ").firstOrNull().orEmpty()
+                            SuccessCheck(Amber, OnAmber, 92.dp)
                             Text(if (first.isNotBlank()) "Welcome, $first!" else "Welcome!",
-                                fontSize = 40.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
-                            if (form.company.isNotBlank()) Text(form.company, color = Amber, fontSize = 18.sp)
+                                style = MaterialTheme.typography.displaySmall, color = LineC, textAlign = TextAlign.Center)
+                            if (form.company.isNotBlank()) Text(form.company, color = AmberText, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                             val place = listOf(form.state, form.country).filter { it.isNotBlank() }.joinToString(", ")
                             if (place.isNotBlank()) Text(place, color = LineDim, fontSize = 14.sp)
                             val summary = listOfNotNull(form.customerType, form.marketExposure) + form.products.groupBy { it.substringBefore(" > ") }
                                 .map { (p, l) -> if (l.any { " > " in it }) "$p (${l.size})" else p }
-                            Text(summary.joinToString("  •  "), color = Amber, textAlign = TextAlign.Center)
+                            Text(summary.joinToString("  •  "), color = AmberText, textAlign = TextAlign.Center)
                             Text("Visit logged " + SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()).format(Date(loggedAt)) +
                                 (employee?.let { " · attended by ${it.name}" } ?: ""), color = Steel, fontSize = 13.sp, textAlign = TextAlign.Center)
                             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -484,8 +752,8 @@ fun App() {
                                     minLines = 3, maxLines = 6, modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
                                 Text("Have a handwritten enquiry? Attach a photo of it.", color = Steel, fontSize = 13.sp)
                                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    SecondaryButton("Take photo") { openNoteCamera() }
-                                    SecondaryButton("Upload image") { openNoteUpload() }
+                                    SecondaryButton("Take photo", Modifier.weight(1f), icon = Icons.Default.PhotoCamera) { openNoteCamera() }
+                                    SecondaryButton("Upload", Modifier.weight(1f), icon = Icons.Default.Image) { openNoteUpload() }
                                 }
                                 if (notePhotos.isNotEmpty()) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -509,100 +777,46 @@ fun App() {
                             }
                             Text("Thanks for stopping by. Someone from our team will follow up. Tap \"Log next visitor now\" when you're done.",
                                 color = Steel, textAlign = TextAlign.Center)
-                            SecondaryButton("Log next visitor now") { reset() }
+                            PrimaryButton("Log next visitor", icon = Icons.Default.PersonAdd) { reset() }
                         }
                     }
+                  }   // AnimatedContent(screen)
                 }
             }
+          } }   // when (page) / AnimatedContent
+          // developer credit on every page; hidden while typing so the keyboard keeps the full height
+          @OptIn(ExperimentalLayoutApi::class)
+          val imeOpen = WindowInsets.isImeVisible
+          if (!imeOpen) BrandFooter()
+         }   // Column
 
             importMsg?.let { msg ->
                 AlertDialog(onDismissRequest = { importMsg = null }, title = { Text("Import finished") }, text = { Text(msg) },
                     confirmButton = { TextButton({ importMsg = null }) { Text("OK") } })
             }
-            if (showAdmin) AdminPanel(visitors, deviceName,
-                onDeviceName = { deviceName = it; prefs.edit().putString("device", it).apply() },
-                signedIn = employee?.name, onSwitchUser = { showAdmin = false; screen = Screen.Login },
-                onClose = { showAdmin = false }, onExport = { exportData() },
-                onImport = { importPicker.launch(arrayOf("*/*")) },
-                onEdit = { v -> scope.launch { db.dao().update(v) } },
-                onDelete = { v ->
-                    scope.launch {
-                        db.dao().delete(v)
-                        withContext(Dispatchers.IO) { v.cardPhotoPath?.let { File(it).delete() }; Sync.notePhotos(v).forEach { it.delete() } }
-                    }
-                },
-                onClear = { scope.launch { db.dao().clear(); File(ctx.filesDir, "cards").deleteRecursively() } },
-                onRetryThankYou = { v ->
-                    scope.launch {
-                        if (ThankYou.isValidEmail(v.email)) { db.dao().markThankYou(v.uid, ThankYou.QUEUED, 0); ThankYouWorker.enqueue(ctx) }
-                    }
-                })
+            if (confirmDiscard) AlertDialog(
+                onDismissRequest = { confirmDiscard = false },
+                icon = { Icon(Icons.Default.Warning, null, tint = Amber) },
+                title = { Text("Discard this visit?") },
+                text = { Text("The visit in progress hasn't been saved. Start a new visit anyway?") },
+                confirmButton = { TextButton({ confirmDiscard = false; reset(); section = AppPage.Visit }) { Text("Discard", color = Danger) } },
+                dismissButton = { TextButton({ confirmDiscard = false }) { Text("Keep editing") } })
+            mailSuccess?.let { msg ->
+                AlertDialog(onDismissRequest = { mailSuccess = null },
+                    icon = { Icon(Icons.Default.CheckCircle, null, tint = Amber, modifier = Modifier.size(40.dp)) },
+                    title = { Text("Mail settings saved", textAlign = TextAlign.Center) },
+                    text = { Text(msg, textAlign = TextAlign.Center) },
+                    confirmButton = { TextButton({ mailSuccess = null }) { Text("OK", color = AmberText, fontWeight = FontWeight.Bold) } })
+            }
+            AppSnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(16.dp))
         }
+      }
     }
+    }   // VisitorTheme
 }
 
-/** Sender account for the automatic thank-you mail. "Save & send test" mails the account itself, so mistakes show up at once. */
-@Composable
-fun MailSettingsDialog(onDone: () -> Unit) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val initial = remember { SmtpSettings.load(ctx) }
-    var host by remember { mutableStateOf(initial.host.ifBlank { "smtp.gmail.com" }) }
-    var port by remember { mutableStateOf(initial.port.toString()) }
-    var user by remember { mutableStateOf(initial.user) }
-    var password by remember { mutableStateOf(initial.password) }
-    var from by remember { mutableStateOf(initial.from) }
-    var fromName by remember { mutableStateOf(initial.fromName) }
-    var status by remember { mutableStateOf<String?>(null) }
-    var busy by remember { mutableStateOf(false) }
-    fun current() = SmtpSettings(host.trim(), port.trim().toIntOrNull() ?: 587, user.trim(), password, from.trim(), fromName.trim())
-    AlertDialog(
-        onDismissRequest = { if (!busy) onDone() },
-        title = { Text("Mail settings") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("The account thank-you e-mails are sent from. For Gmail use smtp.gmail.com, port 587 and an App Password " +
-                    "(Google account > Security > 2-Step Verification > App passwords).", fontSize = 12.sp)
-                OutlinedTextField(host, { host = it }, label = { Text("SMTP server") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(port, { port = it.filter(Char::isDigit).take(5) }, label = { Text("Port (587 or 465)") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(user, { user = it }, label = { Text("Username / e-mail") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(password, { password = it }, label = { Text("Password / app password") }, singleLine = true,
-                    visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(from, { from = it }, label = { Text("Send from (blank = username)") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(fromName, { fromName = it }, label = { Text("Company name in the e-mail") }, singleLine = true,
-                    modifier = Modifier.fillMaxWidth())
-                status?.let { Text(it, fontSize = 13.sp, color = if (it.startsWith("Test mail sent")) PaperInk else Danger) }
-            }
-        },
-        confirmButton = {
-            TextButton(enabled = !busy && current().complete, onClick = {
-                val c = current()
-                if (!ThankYou.isValidEmail(c.user) && !ThankYou.isValidEmail(c.from)) {
-                    status = "Could not send: enter a full e-mail address (name@company.com) as the username."; return@TextButton
-                }
-                if (c.from.isNotBlank() && !ThankYou.isValidEmail(c.from)) {
-                    status = "Could not send: \"Send from\" must be a full e-mail address like name@company.com, or leave it blank."; return@TextButton
-                }
-                busy = true; status = "Sending test mail…"
-                scope.launch {
-                    val err = withContext(Dispatchers.IO) { try { ThankYou.sendTest(c); null } catch (e: Exception) { e.message ?: e.javaClass.simpleName } }
-                    busy = false
-                    if (err == null) { SmtpSettings.save(ctx, c); status = "Test mail sent to ${c.from.ifBlank { c.user }}. Settings saved." }
-                    else status = "Could not send: $err"
-                }
-            }) { Text(if (busy) "Please wait…" else "Save & send test") }
-        },
-        dismissButton = {
-            Row {
-                TextButton(enabled = !busy, onClick = { SmtpSettings.save(ctx, current()); onDone() }) { Text("Save only") }
-                TextButton(enabled = !busy, onClick = onDone) { Text("Close") }
-            }
-        })
-}
-
-val Color_F0C3B8 =androidx.compose.ui.graphics.Color(0xFFF0C3B8)
+val Color_F0C3B8: androidx.compose.ui.graphics.Color
+    @Composable @ReadOnlyComposable get() = LocalAppColors.current.dangerText
 
 @Composable
 fun Centered(content: @Composable ColumnScope.() -> Unit) =
@@ -621,208 +835,53 @@ fun NavRow(left: @Composable () -> Unit, right: @Composable () -> Unit) =
         verticalAlignment = Alignment.CenterVertically) { left(); right() }
 
 @Composable
-fun PaperField(label: String, value: String, singleLine: Boolean = true, hint: String? = null, onChange: (String) -> Unit) =
-    OutlinedTextField(value, onChange, label = { Text(label) }, singleLine = singleLine,
-        minLines = if (singleLine) 1 else 2, modifier = Modifier.fillMaxWidth(),
+fun PaperField(label: String, value: String, icon: androidx.compose.ui.graphics.vector.ImageVector?, modifier: Modifier = Modifier.fillMaxWidth(),
+               singleLine: Boolean = true, hint: String? = null, keyboard: KeyboardType = KeyboardType.Text,
+               caps: KeyboardCapitalization = KeyboardCapitalization.None, last: Boolean = false, error: String? = null,
+               onChange: (String) -> Unit) =
+    OutlinedTextField(value, onChange, modifier, label = { Text(label) }, singleLine = singleLine, shape = RoundedCornerShape(14.dp),
+        minLines = if (singleLine) 1 else 2,
+        leadingIcon = icon?.let { { Icon(it, null, Modifier.size(20.dp)) } },
+        keyboardOptions = KeyboardOptions(capitalization = caps, keyboardType = keyboard,
+            imeAction = if (last) ImeAction.Done else ImeAction.Next),
         // A hint means the card reader was unsure: amber border plus a short note until the visitor edits the field.
-        supportingText = hint?.let { { Text(it, color = PaperHint) } },
+        isError = error != null,
+        supportingText = (error ?: hint)?.let { msg -> { Text(msg, color = if (error != null) Color_F0C3B8 else AmberText) } },
         colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = PaperInk, unfocusedTextColor = PaperInk,
-            focusedBorderColor = Amber, unfocusedBorderColor = if (hint != null) Amber else PaperLine,
-            focusedLabelColor = PaperInk.copy(alpha = 0.7f), unfocusedLabelColor = PaperInk.copy(alpha = 0.6f),
-            cursorColor = Amber))
+            focusedTextColor = LineC, unfocusedTextColor = LineC, cursorColor = Amber,
+            focusedContainerColor = if (IsDark) NavyDeep.copy(alpha = 0.35f) else Navy,
+            unfocusedContainerColor = if (IsDark) NavyDeep.copy(alpha = 0.25f) else Navy,
+            focusedBorderColor = Amber, unfocusedBorderColor = if (hint != null) Amber else if (IsDark) LineC.copy(alpha = 0.16f) else Outline,
+            focusedLabelColor = AmberText, unfocusedLabelColor = Steel,
+            focusedLeadingIconColor = AmberText, unfocusedLeadingIconColor = Steel,
+            errorContainerColor = if (IsDark) NavyDeep.copy(alpha = 0.25f) else Navy, errorTextColor = LineC,
+            errorBorderColor = Danger, errorLabelColor = Color_F0C3B8, errorLeadingIconColor = Color_F0C3B8, errorCursorColor = Amber))
 
-/** Edit a saved record. The UID, visit time, photos and thank-you status are left untouched. */
-@OptIn(ExperimentalLayoutApi::class)
+/** Titled card grouping related form fields (Details screen). */
 @Composable
-fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Unit) {
-    var name by remember { mutableStateOf(v.name) }
-    var title by remember { mutableStateOf(v.title) }
-    var company by remember { mutableStateOf(v.company) }
-    var email by remember { mutableStateOf(v.email) }
-    var phone by remember { mutableStateOf(v.phone) }
-    var address by remember { mutableStateOf(v.address) }
-    var state by remember { mutableStateOf(v.state) }
-    var country by remember { mutableStateOf(v.country) }
-    var customerType by remember { mutableStateOf(v.customerType) }
-    var market by remember { mutableStateOf(v.marketExposure) }
-    var other by remember { mutableStateOf(v.otherDetail) }
-    var interest by remember { mutableStateOf(v.additionalInterest) }
-    var outcomes by remember { mutableStateOf(v.leadOutcomes.split("; ").filter { it.isNotBlank() }.toSet()) }
-    var notes by remember { mutableStateOf(v.discussionNotes) }
-    var remark by remember { mutableStateOf(v.remarks) }
-    var remarkOther by remember { mutableStateOf(v.remarksOther) }
-    var followNote by remember { mutableStateOf(v.followUpNote) }
-    @Composable fun field(label: String, value: String, multi: Boolean = false, set: (String) -> Unit) =
-        OutlinedTextField(value, set, label = { Text(label) }, singleLine = !multi, minLines = if (multi) 2 else 1,
-            modifier = Modifier.fillMaxWidth())
-    @Composable fun chips(options: List<String>, selected: (String) -> Boolean, pick: (String) -> Unit) =
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            options.forEach { o -> FilterChip(selected(o), { pick(o) }, label = { Text(o) }) }
-        }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Edit visitor") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("ID: ${v.uid}", fontSize = 12.sp, color = Steel)
-                field("Name", name) { name = it }
-                field("Title", title) { title = it }
-                field("Company", company) { company = it }
-                field("Email", email) { email = it }
-                field("Phone", phone) { phone = it }
-                field("Address", address, true) { address = it }
-                field("State", state) { state = it }
-                field("Country", country) { country = it }
-                Text("Customer type", fontSize = 12.sp, color = Steel)
-                chips(CUSTOMER_TYPES, { it == customerType }) { customerType = if (customerType == it) "" else it }
-                Text("Market exposure", fontSize = 12.sp, color = Steel)
-                chips(MARKET_EXPOSURE, { it == market }) { market = if (market == it) "" else it }
-                field("Other product detail", other, true) { other = it }
-                field("Also interested in", interest, true) { interest = it }
-                Text("Lead outcome", fontSize = 12.sp, color = Steel)
-                chips(LEAD_OUTCOMES, { it in outcomes }) { outcomes = if (it in outcomes) outcomes - it else outcomes + it }
-                field("Discussion notes", notes, true) { notes = it }
-                Text("Remarks", fontSize = 12.sp, color = Steel)
-                chips(REMARK_OPTIONS, { it == remark }) { remark = if (remark == it) "" else it }
-                if (remark == "Others") field("Remarks (other)", remarkOther) { remarkOther = it }
-                if (v.followUpAction == "Remarks") field("Follow-up note", followNote, true) { followNote = it }
-            }
-        },
-        confirmButton = {
-            TextButton({
-                val mail = email.trim()
-                onSave(v.copy(name = name.trim(), title = title.trim(), company = company.trim(), email = mail, phone = phone.trim(),
-                    address = address.trim(), state = state.trim(), country = country.trim(),
-                    customerType = customerType, marketExposure = market, otherDetail = other.trim(),
-                    additionalInterest = interest.trim(),
-                    leadOutcomes = LEAD_OUTCOMES.filter { it in outcomes }.joinToString("; "),
-                    discussionNotes = notes.trim(), remarks = remark,
-                    remarksOther = if (remark == "Others") remarkOther.trim() else "",
-                    followUpNote = if (v.followUpAction == "Remarks") followNote.trim() else v.followUpNote,
-                    // a corrected e-mail on a record that had none becomes mailable
-                    thankYouStatus = if (v.thankYouStatus == "" && ThankYou.isValidEmail(mail)) ThankYou.PENDING else v.thankYouStatus))
-            }) { Text("Save") }
-        },
-        dismissButton = { TextButton(onDismiss) { Text("Cancel") } })
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun AdminPanel(visitors: List<Visitor>, deviceName: String, onDeviceName: (String) -> Unit,
-               signedIn: String?, onSwitchUser: () -> Unit,
-               onClose: () -> Unit, onExport: () -> Unit, onImport: () -> Unit,
-               onEdit: (Visitor) -> Unit, onDelete: (Visitor) -> Unit, onClear: () -> Unit, onRetryThankYou: (Visitor) -> Unit) {
-    var editing by remember { mutableStateOf<Visitor?>(null) }
-    var confirmClear by remember { mutableStateOf(false) }
-    var clearText by remember { mutableStateOf("") }
-    var pendingDelete by remember { mutableStateOf<Visitor?>(null) }
-    val fmt = remember { SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()) }
-    Column(Modifier.fillMaxSize().background(NavyDeep).padding(20.dp)) {
+fun FormSection(title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, content: @Composable ColumnScope.() -> Unit) =
+    Column(Modifier.fillMaxWidth().cardBorder().clip(CardShape)
+        .background(if (IsDark) androidx.compose.ui.graphics.Color(0xFF244D70) else Panel).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("Visitor log (${visitors.size})", fontSize = 26.sp, fontWeight = FontWeight.Bold,
-                fontFamily = Display, modifier = Modifier.weight(1f))
-            PrimaryButton("Close", modifier = Modifier.height(44.dp)) { onClose() }
-        }
-        OutlinedTextField(deviceName, onDeviceName, label = { Text("This device's name (e.g. Stand-A, Priya)") },
-            singleLine = true, modifier = Modifier.fillMaxWidth().padding(top = 12.dp), colors = darkFieldColors())
-        Text(if (signedIn != null) "Signed in: $signedIn" else "Not signed in", color = Amber, fontSize = 13.sp,
-            modifier = Modifier.padding(top = 8.dp))
-        FlowRow(Modifier.padding(vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            SecondaryButton("Switch user") { onSwitchUser() }
-            SecondaryButton("Export (zip)") { onExport() }
-            SecondaryButton("Import / merge") { onImport() }
-            SecondaryButton("Clear all") { confirmClear = true }
-        }
-        if (visitors.isEmpty()) Text("No visitors logged yet.", color = Steel, modifier = Modifier.padding(top = 40.dp).fillMaxWidth(), textAlign = TextAlign.Center)
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(visitors, key = { it.id }) { v ->
-                Row(Modifier.fillMaxWidth().clip(Shape6).background(Panel).padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (v.cardPhotoPath != null)
-                        AsyncImage(File(v.cardPhotoPath), null, Modifier.size(width = 56.dp, height = 40.dp).clip(RoundedCornerShape(4.dp)),
-                            contentScale = ContentScale.Crop)
-                    Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                        Text(listOf(v.name.ifBlank { "Unnamed visitor" }, v.title).filter { it.isNotBlank() }.joinToString(" · "),
-                            fontWeight = FontWeight.SemiBold)
-                        Text(listOf(v.company, v.email, v.phone).filter { it.isNotBlank() }.joinToString(" · "),
-                            fontSize = 12.sp, color = Steel)
-                        val place = listOf(v.address, v.state, v.country).filter { it.isNotBlank() }.joinToString(", ")
-                        if (place.isNotBlank()) Text(place, fontSize = 12.sp, color = LineDim)
-                        Text("Visited " + fmt.format(Date(v.createdAt)) +
-                            (if (v.attendedByName.isNotBlank()) " · Attended by ${v.attendedByName}" else ""),
-                            fontSize = 12.sp, color = Steel)
-                        Text(listOf(v.customerType, v.marketExposure).filter { it.isNotBlank() }.joinToString(" · "), fontSize = 12.sp, color = Amber)
-                        Text(Catalog.summarize(v.products.split("; ").filter { it.isNotBlank() }), fontSize = 12.sp, color = Amber)
-                        if (v.otherDetail.isNotBlank()) Text(v.otherDetail, fontSize = 12.sp, color = LineDim)
-                        if (v.additionalInterest.isNotBlank()) Text("Also interested in: " + v.additionalInterest, fontSize = 12.sp, color = LineDim)
-                        val notes = Sync.notePhotos(v)
-                        if (notes.isNotEmpty()) Row(Modifier.padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            notes.forEach { AsyncImage(it, "Handwritten enquiry", Modifier.size(40.dp).clip(RoundedCornerShape(4.dp)),
-                                contentScale = ContentScale.Crop) }
-                        }
-                        if (v.leadOutcomes.isNotBlank()) Text("Outcome: " + v.leadOutcomes.replace("; ", " · "), fontSize = 12.sp, color = Amber)
-                        val remark = if (v.remarks == "Others" && v.remarksOther.isNotBlank()) "Others: ${v.remarksOther}" else v.remarks
-                        if (remark.isNotBlank()) Text("Remarks: $remark", fontSize = 12.sp, color = LineDim)
-                        val follow = listOf(v.followUpAction, if (v.followUpAt > 0) fmt.format(Date(v.followUpAt)) else "", v.followUpNote)
-                            .filter { it.isNotBlank() }.joinToString(" · ")
-                        if (follow.isNotBlank()) Text("Follow-up: $follow", fontSize = 12.sp, color = LineDim)
-                        if (v.discussionNotes.isNotBlank())
-                            Text(v.discussionNotes, fontSize = 12.sp, color = LineDim, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                        when (v.thankYouStatus) {
-                            ThankYou.SENT -> Text("Thank-you mail sent " + fmt.format(Date(v.thankYouSentAt)), fontSize = 12.sp, color = Steel)
-                            ThankYou.QUEUED -> Text("Thank-you mail queued, sends when online", fontSize = 12.sp, color = Amber)
-                            ThankYou.PENDING -> Text("Thank-you mail not sent yet", fontSize = 12.sp, color = Amber)
-                            ThankYou.FAILED -> Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Thank-you mail failed", fontSize = 12.sp, color = Danger)
-                                TextButton({ onRetryThankYou(v) }) { Text("Retry", fontSize = 12.sp) }
-                            }
-                        }
-                    }
-                    IconButton({ editing = v }) { Icon(Icons.Default.Edit, "Edit", tint = Steel) }
-                    IconButton({ pendingDelete = v }) { Icon(Icons.Default.Delete, "Delete", tint = Steel) }
-                }
+            Box(Modifier.size(30.dp).clip(RoundedCornerShape(9.dp)).background(Amber.copy(alpha = 0.18f)), contentAlignment = Alignment.Center) {
+                Icon(icon, null, tint = AmberText, modifier = Modifier.size(17.dp))
             }
+            Spacer(Modifier.width(10.dp))
+            Text(title.uppercase(), fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp, color = LineDim)
         }
+        content()
     }
-    editing?.let { v -> EditVisitorDialog(v, onDismiss = { editing = null }, onSave = { onEdit(it); editing = null }) }
-    pendingDelete?.let { v ->
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null },
-            icon = { Icon(Icons.Default.Delete, null, tint = Danger) },
-            title = { Text("Delete this visitor?") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(listOf(v.name.ifBlank { "Unnamed visitor" }, v.company).filter { it.isNotBlank() }.joinToString(" · "),
-                        fontWeight = FontWeight.SemiBold)
-                    Text("Visited " + fmt.format(Date(v.createdAt)), fontSize = 13.sp)
-                    Text("Their details, card photo and attached images will be removed from this phone. This can't be undone.")
-                }
-            },
-            confirmButton = { TextButton({ onDelete(v); pendingDelete = null }) { Text("Delete", color = Danger) } },
-            dismissButton = { TextButton({ pendingDelete = null }) { Text("Cancel") } })
+
+/** Tinted banner with an icon, e.g. "Fields outlined in amber need a quick check". */
+@Composable
+fun Notice(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, color: androidx.compose.ui.graphics.Color,
+           textColor: androidx.compose.ui.graphics.Color) =
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(color.copy(alpha = 0.14f))
+        .border(1.dp, color.copy(alpha = 0.45f), RoundedCornerShape(12.dp)).padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = textColor, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Text(text, fontSize = 13.sp, color = textColor, fontWeight = FontWeight.Medium)
     }
-    if (confirmClear) AlertDialog(
-        onDismissRequest = { confirmClear = false; clearText = "" },
-        icon = { Icon(Icons.Default.Warning, null, tint = Danger) },
-        title = { Text("Delete all ${visitors.size} visitors?") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Every visitor on this phone, with card photos and attached images, will be permanently deleted. " +
-                    "Export first if this data hasn't been merged yet.")
-                OutlinedTextField(clearText, { clearText = it }, singleLine = true,
-                    label = { Text("Type DELETE to confirm") }, modifier = Modifier.fillMaxWidth())
-            }
-        },
-        confirmButton = {
-            TextButton({ onClear(); confirmClear = false; clearText = "" }, enabled = clearText.trim() == "DELETE") {
-                Text("Delete all", color = if (clearText.trim() == "DELETE") Danger else Steel)
-            }
-        },
-        dismissButton = {
-            Row {
-                TextButton({ confirmClear = false; clearText = ""; onExport() }) { Text("Export first") }
-                TextButton({ confirmClear = false; clearText = "" }) { Text("Cancel") }
-            }
-        })
-}
+

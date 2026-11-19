@@ -14,8 +14,25 @@ class CatalogTest {
     }
 
     @Test fun makeWithoutKitsIsStillSelectable() {
-        assertEquals(listOf("Retrofits > OHTC > ELGI > PLC conversion", "Retrofits > OHTC > SIMTA",
-            "Retrofits > OHTC > LUWA", "Retrofits > OHTC > Electro-Jet"), Catalog.paths("Retrofits", retrofit("OHTC")))
+        assertEquals(listOf("Retrofits > OHTC > ELGI > PLC conversion", "Retrofits > OHTC > SIMTA > PLC Conversion"), Catalog.paths("Retrofits", retrofit("OHTC")))
+    }
+
+    @Test fun retrofitOthersIsFreeTextOnly() {
+        val comber = retrofit("Comber")
+        assertEquals(listOf("LMW", "Rieter", "Others"), comber.sections.map { it.title })
+        assertTrue(comber.sections.last().freeText)
+        assertTrue(Catalog.paths("Retrofits", comber).none { it.contains("Others") })
+        assertEquals("Retrofits > Comber > Others > ", Catalog.freeTextPrefix("Retrofits", comber, comber.sections.last()))
+        assertEquals(listOf("Retrofits > Lap Former > LMW > HMI conversion", "Retrofits > Lap Former > Rieter > HMI conversion"),
+            Catalog.paths("Retrofits", retrofit("Lap Former")))
+        assertEquals(listOf("LMW", "Others"), retrofit("Spinning").sections.map { it.title })
+        assertTrue(retrofit("Winding - Savio").sections.last().freeText)
+    }
+
+    @Test fun titanIsInOpenEndForBothSpares() {
+        fun openEnd(p: String) = Catalog.machinesFor(p).first { it.name == "Open-End" }.sections.single().items
+        assertEquals(listOf("Rieter", "Saurer", "Titan", "Others"), openEnd("Mechanical Spares"))
+        assertEquals(listOf("Rieter", "Saurer", "Titan", "Others"), openEnd("Electronics Spares"))
     }
 
     @Test fun otherProductsCardsAreTheirOwnPaths() {

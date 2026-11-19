@@ -21,6 +21,16 @@ object CardReader {
     private const val MAX_EDGE = 4600
 
     /**
+     * Blocking: reads the front and, if given, the back of a card and merges them (front first, back fills the gaps;
+     * see [mergeSides]). Returns null only when neither side could be read.
+     */
+    fun read(ctx: Context, front: File, back: File?): Parsed? {
+        val f = try { read(ctx, front) } catch (e: Exception) { if (back == null) throw e else null }
+        val b = back?.let { try { read(ctx, it) } catch (e: Exception) { null } }
+        return mergeSides(f, b)
+    }
+
+    /**
      * Blocking: call from a background thread. Runs OCR on the photo as taken; if that does not find an e-mail, a phone
      * number and a name, retries the same photo turned 90/270/180 degrees (cards are often held sideways) and keeps the
      * pass that found the most. Returns null when the photo cannot be read at all.

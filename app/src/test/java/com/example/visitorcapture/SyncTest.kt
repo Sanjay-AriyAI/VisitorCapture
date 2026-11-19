@@ -1,6 +1,7 @@
 package com.example.visitorcapture
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SyncTest {
@@ -36,8 +37,27 @@ class SyncTest {
         val b = java.io.File(dir, "0f8c1d2e_note_2.png").apply { writeBytes(byteArrayOf(2)) }
         val gone = java.io.File(dir, "0f8c1d2e_note_3.jpg")
         val r = row(visitor(followUpAt = 0).copy(notePhotoPaths = listOf(a, gone, b).joinToString("|") { it.absolutePath }))
-        assertEquals("notes/0f8c1d2e_note_1.jpg; notes/0f8c1d2e_note_2.png", r["HandwrittenNotes"])
+        val folder = "leads/0f8c1d2e-1111-2222-3333-444455556666 - Anil Kumar - Sunrise Textiles"
+        assertEquals("$folder/handwritten-note-1.jpg; $folder/handwritten-note-2.png", r["HandwrittenNotes"])
         dir.deleteRecursively()
+    }
+
+    @Test fun leadFolderStripsUnsafeCharacters() {
+        val v = visitor(followUpAt = 0).copy(name = "  Anil  Kumar ", company = "A/B: \"Textiles\" <Pvt>?")
+        assertEquals("leads/0f8c1d2e-1111-2222-3333-444455556666 - Anil Kumar - A B Textiles Pvt", Sync.leadFolder(v))
+        assertEquals("leads/0f8c1d2e-1111-2222-3333-444455556666", Sync.leadFolder(v.copy(name = "", company = "")))
+    }
+
+    @Test fun detailsTextListsEnteredFieldsOnly() {
+        val t = Sync.detailsText(visitor(followUpAt = 0).copy(products = "Pumps > A1; Valves", phone = ""))
+        assertTrue("Name: Anil Kumar" in t)
+        assertTrue("Company: Sunrise Textiles" in t)
+        assertTrue("Products: Pumps > A1\r\n    Valves" in t)
+        assertTrue("Discussion notes: Needs 20 pcs, \"urgent\"\r\n    second line" in t)
+        assertTrue("Remarks (other): Price list asked" in t)
+        assertTrue("Phone:" !in t.substringBefore("ATTENDED BY"))
+        assertTrue("Follow-up date" !in t)
+        assertTrue("ATTACHMENTS" !in t)
     }
 
     @Test fun noFollowUpDateExportsBlank() {

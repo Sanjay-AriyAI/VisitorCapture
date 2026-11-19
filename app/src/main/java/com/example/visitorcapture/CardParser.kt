@@ -14,13 +14,66 @@ data class Parsed(
     val address: String = "", val state: String = "", val country: String = "",
     val flags: Map<String, String> = emptyMap(),
     /** The unprocessed text the scanner read. Only shown in debug builds, to diagnose a bad read. */
-    val raw: String = ""
+    val raw: String = "",
+    /** Other addresses found on the card besides [email], at most [MAX_EMAILS] - 1. */
+    val extraEmails: List<String> = emptyList(),
+    val website: String = "",
+    /** Other numbers found on the card besides [phone], at most [MAX_PHONES] - 1. */
+    val extraPhones: List<String> = emptyList()
 )
+
+/** E-mail fields per visitor: the main one plus up to two more (secondary, third). */
+const val MAX_EMAILS = 3
+
+/** Phone fields per visitor: the main one plus up to two more (secondary, third). */
+const val MAX_PHONES = 3
+
+/**
+ * What makes two phone numbers the same: their last 10 digits, so "+91 98765 43210", "098765 43210" and "9876543210"
+ * are one number. Text with no digits is compared as typed.
+ */
+fun phoneKey(s: String): String = s.filter(Char::isDigit).takeLast(10).ifEmpty { s.trim().lowercase() }
 
 /** How much useful contact information a parse found. Used to pick the best of several OCR passes (rotations). */
 fun Parsed.score(): Int =
     (if (email.isNotEmpty()) 3 else 0) + (if (phone.isNotEmpty()) 3 else 0) + (if (title.isNotEmpty()) 2 else 0) +
         (if (name.isNotEmpty()) 1 else 0) + (if (company.isNotEmpty()) 1 else 0) + (if (address.isNotEmpty()) 1 else 0)
+
+/**
+ * Combines what was read from the front and the (optional) back of a card. The front wins wherever it found
+ * something; the back only fills fields the front left blank. A field's "check this" flag follows the side its
+ * value came from. Either side may be missing (null) when its photo could not be read.
+ */
+fun mergeSides(front: Parsed?, back: Parsed?): Parsed? {
+    if (front == null) return back
+    if (back == null) return front
+    val flags = mutableMapOf<String, String>()
+    fun pick(key: String, f: String, b: String): String {
+        val useFront = f.isNotBlank() || b.isBlank()
+        (if (useFront) front.flags[key] else back.flags[key])?.let { flags[key] = it }
+        return if (useFront) f else b
+    }
+    val email = pick("email", front.email, back.email)
+    // every other address from either side, front first, without repeating the main one
+    val extras = (listOf(front.email) + front.extraEmails + back.email + back.extraEmails)
+        .filter { it.isNotBlank() && !it.equals(email, ignoreCase = true) }.distinctBy { it.lowercase() }.take(MAX_EMAILS - 1)
+    val phone = pick("phone", front.phone, back.phone)
+    // every other number from either side, front first, without repeating the main one
+    val extraPhones = (listOf(front.phone) + front.extraPhones + back.phone + back.extraPhones)
+        .filter { it.isNotBlank() && phoneKey(it) != phoneKey(phone) }.distinctBy(::phoneKey).take(MAX_PHONES - 1)
+    return Parsed(
+        name = pick("name", front.name, back.name), title = pick("title", front.title, back.title),
+        company = pick("company", front.company, back.company),
+        email = email, phone = phone, extraEmails = extras, extraPhones = extraPhones,
+        website = pick("website", front.website, back.website),
+        address = pick("address", front.address, back.address), state = pick("state", front.state, back.state),
+        country = pick("country", front.country, back.country),
+        flags = flags,
+        raw = listOf(front.raw, back.raw).filter { it.isNotBlank() }.let {
+            if (it.size == 2) "=== FRONT ===\n${front.raw}\n=== BACK ===\n${back.raw}" else it.firstOrNull().orEmpty()
+        }
+    )
+}
 
 /** State and country lookup used to pre-fill the address fields. Edit the lists to suit your visitors. */
 object Places {
@@ -107,6 +160,20 @@ object Places {
 
 private val EMAIL_RX = Regex("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
 private val PHONE_RX = Regex("(\\+?\\d[\\d\\s().-]{7,}\\d)")
+// "www.example.com", "https://example.co.in/en", and OCR's "www,example.com" / "www example.com".
+private val WEB_RX = Regex("(?i)(?:https?://)?www[.,]?\\s?[a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.[a-z]{2,}(?:/[^\\s,;]*)?|https?://[a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.[a-z]{2,}(?:/[^\\s,;]*)?")
+// A labelled bare domain: "Web: example.com", "Website - example.in".
+private val WEB_LABEL_RX = Regex("(?i)^\\s*(?:web\\s*site|web|url)\\s*[:\\-]?\\s*([a-z0-9-]+(?:\\.[a-z0-9-]+)*\\.[a-z]{2,}(?:/[^\\s,;]*)?)")
+
+/** The company website printed on the card, tidied ("www,abc.com" -> "www.abc.com"), or "" if there is none. */
+internal fun findWebsite(lines: List<String>): String {
+    for (line in lines) {
+        val l = EMAIL_RX.replace(line, " ")   // the domain of an e-mail address is not a website
+        val hit = WEB_RX.find(l)?.value ?: WEB_LABEL_RX.find(l)?.groupValues?.get(1) ?: continue
+        return hit.replace(Regex("(?i)^(https?://)?www[.,]?\\s?"), "$1www.").trimEnd('.', '/')
+    }
+    return ""
+}
 // Legal suffixes are trusted on their own; business words ("Engineering", "Services") also appear in job titles.
 private val LEGAL_RX = Regex("(?i)\\b(ltd|limited|inc|gmbh|pvt|private|llp|llc|corp|corporation|co\\.|company)\\b")
 // Same, without the loose "co." / "company" – safe to trust even on a line that otherwise looks like an address.
@@ -481,10 +548,17 @@ fun parseLines(raw: List<OcrLine>): Parsed {
     if (email != null && (email.corrected || emailRepaired)) flags["email"] = "This was misread or misspelt on the card and was repaired. Please check it."
 
     // ---- phone ---------------------------------------------------------------------------------------------------
-    val phoneCand = phoneCandidates(texts.filterIndexed { i, _ -> contact[i] }).maxByOrNull { it.score }
+    // The same number printed twice ("+91 98765 43210" and "98765 43210") counts once; the better-scoring form is kept.
+    val phoneCands = phoneCandidates(texts.filterIndexed { i, _ -> contact[i] })
+    val phoneCand = phoneCands.maxByOrNull { it.score }
     // A helpline / toll-free / fax number is not the visitor's number: leave the field empty rather than fill it wrongly.
     val phone = phoneCand?.takeIf { it.score >= 0 }?.value ?: ""
     val onlyHelpline = phoneCand != null && phone.isEmpty()
+    // Other direct numbers on the card (card order), for the secondary / third phone fields. Helplines stay out here too.
+    // groupBy keeps first-appearance order, so the extras follow the card.
+    val extraPhones = if (phone.isEmpty()) emptyList() else phoneCands.filter { it.score >= 0 }
+        .groupBy { phoneKey(it.value) }.filterKeys { it != phoneKey(phone) }
+        .values.map { same -> same.maxBy { it.score }.value }.take(MAX_PHONES - 1)
 
     // ---- address / state / country ------------------------------------------------------------------------------
     val address = (0 until n).filter { addr[it] && it != companyIdx && it != titleIdx && it != nameIdx }
@@ -504,5 +578,7 @@ fun parseLines(raw: List<OcrLine>): Parsed {
     if (company.isEmpty()) flags["company"] = "Not read from the card. Add it if it is printed there."
     else if (domainGuess != null) flags["company"] = "Guessed from the email domain. Please check it against the card."
 
-    return Parsed(name, title, company, email?.value ?: "", phone, address, state, country, flags)
+    return Parsed(name, title, company, email?.value ?: "", phone, address, state, country, flags,
+        extraEmails = emails.filter { it !== email }.map { it.value }.take(MAX_EMAILS - 1), website = findWebsite(texts),
+        extraPhones = extraPhones)
 }

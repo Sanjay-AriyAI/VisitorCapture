@@ -447,3 +447,140 @@ class VCardTest {
         assertNull(VCard.parse("BEGIN:VCARD\nVERSION:3.0\nEND:VCARD"))   // nothing identifying
     }
 }
+
+class CardSidesTest {
+    private val front = Parsed(name = "Anil Kumar", title = "Procurement Manager", company = "Sunrise Textiles",
+        phone = "+91 98765 43210", flags = mapOf("company" to "front flag"), raw = "FRONT TEXT")
+    private val back = Parsed(name = "Sunrise", company = "Sunrise Textiles Pvt Ltd", email = "anil@sunrise.example",
+        address = "Plot 21, Coimbatore", state = "Tamil Nadu", country = "India",
+        flags = mapOf("email" to "back flag", "company" to "ignored"), raw = "BACK TEXT")
+
+    @Test fun backIsOptional() {
+        assertEquals(front, mergeSides(front, null))
+    }
+
+    @Test fun frontWinsAndBackFillsTheGaps() {
+        val m = mergeSides(front, back)!!
+        assertEquals("Anil Kumar", m.name)
+        assertEquals("Sunrise Textiles", m.company)
+        assertEquals("+91 98765 43210", m.phone)
+        assertEquals("anil@sunrise.example", m.email)
+        assertEquals("Plot 21, Coimbatore", m.address)
+        assertEquals("Tamil Nadu", m.state)
+        assertEquals("India", m.country)
+        assertEquals(mapOf("company" to "front flag", "email" to "back flag"), m.flags)
+        assertTrue(m.raw.contains("FRONT TEXT") && m.raw.contains("BACK TEXT"))
+    }
+
+    @Test fun unreadableFrontFallsBackToBack() {
+        assertEquals(back, mergeSides(null, back))
+        assertNull(mergeSides(null, null))
+    }
+}
+
+class MultiEmailTest {
+    @Test fun cardWithSeveralAddressesKeepsTheExtras() {
+        val p = parseCard("""
+            Anil Kumar
+            Procurement Manager
+            Sunrise Textiles Pvt Ltd
+            +91 98765 43210
+            anil@sunrise-textiles.example
+            sales@sunrise-textiles.example
+            info@sunrise-textiles.example
+            accounts@sunrise-textiles.example
+        """.trimIndent())
+        assertEquals("anil@sunrise-textiles.example", p.email)
+        assertEquals(listOf("sales@sunrise-textiles.example", "info@sunrise-textiles.example"), p.extraEmails)
+    }
+
+    @Test fun singleAddressHasNoExtras() {
+        assertEquals(emptyList<String>(), parseCard("Anil Kumar\nanil@sunrise.example").extraEmails)
+    }
+
+    @Test fun sidesPoolTheirAddresses() {
+        val m = mergeSides(Parsed(email = "anil@a.example"),
+            Parsed(email = "ANIL@a.example", extraEmails = listOf("sales@a.example", "info@a.example")))!!
+        assertEquals("anil@a.example", m.email)
+        assertEquals(listOf("sales@a.example", "info@a.example"), m.extraEmails)
+    }
+
+    @Test fun savingTidiesTheFields() {
+        assertEquals("b@x.example" to "c@x.example", splitEmails(" ", listOf("b@x.example", "B@x.example ", "c@x.example")))
+        assertEquals("" to "", splitEmails("", listOf("", " ")))
+    }
+
+    @Test fun mailsGoToEveryValidAddress() {
+        val v = Visitor(uid = "u1", deviceName = "d", name = "Anil", title = "", company = "", email = "anil@a.example",
+            extraEmails = "sales@a.example; not-an-email; priya@naren.example", phone = "", customerType = "", products = "",
+            otherDetail = "", cardPhotoPath = null, createdAt = 0L, attendedByEmail = "priya@naren.example")
+        assertEquals(listOf("anil@a.example", "sales@a.example", "priya@naren.example"), v.mailableEmails())
+        // staff already among the visitor's addresses: not CC'd twice
+        assertEquals("anil@a.example, sales@a.example, priya@naren.example" to null, ReminderMail.recipients(v))
+    }
+}
+
+class WebsiteTest {
+    @Test fun readsTheWebsiteButNotEmailDomains() {
+        val p = parseCard("""
+            Anil Kumar
+            Sunrise Textiles Pvt Ltd
+            anil@sunrise-textiles.example
+            www.sunrise-textiles.example
+        """.trimIndent())
+        assertEquals("www.sunrise-textiles.example", p.website)
+        assertEquals("anil@sunrise-textiles.example", p.email)
+    }
+
+    @Test fun variousWaysOfPrintingIt() {
+        assertEquals("www.indotexnology.com", findWebsite(listOf("info@indotexnology.com", "www,indotexnology.com")))
+        assertEquals("https://abc.co.in/en", findWebsite(listOf("https://abc.co.in/en")))
+        assertEquals("abc.in", findWebsite(listOf("Web: abc.in")))
+        assertEquals("", findWebsite(listOf("sales@abc.in", "+91 98765 43210")))
+    }
+}
+
+class ExtraPhonesTest {
+    @Test fun keepsEveryDirectNumberOnTheCard() {
+        val p = parseCard("""
+            Ravi Jayaraman
+            Co-Founder & CEO
+            +1 407 536 8820
+            +91 948778 1028
+            ravi@mindspark.example
+        """.trimIndent())
+        assertEquals("+91 94877 81028", p.phone)                     // Indian mobile is the main number
+        assertEquals(listOf("+1 407 536 8820"), p.extraPhones)
+    }
+
+    @Test fun atMostThreeNumbersAndNoRepeats() {
+        val p = parseCard("""
+            Anil Kumar
+            Mob: +91 98765 43210
+            98765 43210
+            Ph: 0422 2345678
+            Tel: +91 422 2345679
+            Off: +91 422 2345680
+        """.trimIndent())
+        assertEquals("+91 98765 43210", p.phone)
+        assertEquals(2, p.extraPhones.size)
+        assertTrue(p.extraPhones.none { phoneKey(it) == phoneKey(p.phone) })
+    }
+
+    @Test fun helplinesAreNotExtras() {
+        val p = parseCard("Anil Kumar\nMob: 98765 43210\nToll free: 1800 123 4567")
+        assertEquals(emptyList<String>(), p.extraPhones)
+    }
+
+    @Test fun sidesPoolTheirNumbers() {
+        val m = mergeSides(Parsed(phone = "+91 98765 43210"),
+            Parsed(phone = "98765 43210", extraPhones = listOf("0422 2345678", "+1 407 536 8820")))!!
+        assertEquals("+91 98765 43210", m.phone)
+        assertEquals(listOf("0422 2345678", "+1 407 536 8820"), m.extraPhones)
+    }
+
+    @Test fun savingTidiesThePhoneFields() {
+        assertEquals("98765 43210" to "0422 2345678", splitPhones(" ", listOf("98765 43210", "+91 98765 43210", "0422 2345678")))
+        assertEquals("" to "", splitPhones("", listOf("", " ")))
+    }
+}

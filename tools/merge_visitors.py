@@ -11,8 +11,15 @@ def read(path):
         with z.open("visitors.csv") as f:
             rows = list(csv.DictReader(io.TextIOWrapper(f, encoding="utf-8-sig", newline="")))
         for n in z.namelist():
-            if n.startswith("photos/") and not n.endswith("/"):
+            parts = n.split("/")
+            if n.startswith("photos/") and not n.endswith("/"):      # older exports
                 photos[os.path.basename(n)] = (z, n)
+            elif len(parts) == 3 and parts[0] == "leads" and parts[2] == "business-card.jpg":
+                uid = parts[1].split(" - ")[0].strip()              # leads/<UID - Name - Company>/
+                photos[uid + ".jpg"] = (z, n)
+            elif len(parts) == 3 and parts[0] == "leads" and parts[2] == "business-card-back.jpg":
+                uid = parts[1].split(" - ")[0].strip()
+                photos[uid + "_back.jpg"] = (z, n)
     else:
         with open(path, encoding="utf-8-sig", newline="") as f:
             rows = list(csv.DictReader(f))
@@ -23,24 +30,24 @@ def main():
         sys.exit(__doc__)
     out = sys.argv[1]
     os.makedirs(os.path.join(out, "photos"), exist_ok=True)
-    merged, fields, dupes = {}, None, 0
+    merged, fields, dupes = {}, [], 0
     for path in sys.argv[2:]:
         rows, photos = read(path)
         for r in rows:
-            fields = fields or list(r.keys())
+            fields += [k for k in r.keys() if k not in fields]   # older exports may lack newer columns (e.g. PhotoBack)
             uid = (r.get("UID") or "").strip()
             if not uid or uid in merged:
                 dupes += 1
                 continue
             merged[uid] = r
-            name = uid + ".jpg"
-            if name in photos:
-                z, n = photos[name]
-                with open(os.path.join(out, "photos", name), "wb") as f:
-                    f.write(z.read(n))
+            for name in (uid + ".jpg", uid + "_back.jpg"):
+                if name in photos:
+                    z, n = photos[name]
+                    with open(os.path.join(out, "photos", name), "wb") as f:
+                        f.write(z.read(n))
     ordered = sorted(merged.values(), key=lambda r: int(r.get("TimestampMs") or 0))
     with open(os.path.join(out, "merged_visitors.csv"), "w", encoding="utf-8-sig", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fields or [])
+        w = csv.DictWriter(f, fieldnames=fields, restval="")
         w.writeheader(); w.writerows(ordered)
     print(f"{len(ordered)} unique visitors written, {dupes} duplicates skipped -> {out}")
 

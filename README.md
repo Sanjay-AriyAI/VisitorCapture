@@ -43,7 +43,7 @@ Top progress rail: Scan - Details - Customer - Products - Outcome - Done. Gear i
 
 ## Several devices
 - Every entry gets a UUID and the device name (set it in the staff panel on each phone).
-- Staff panel -> Export (zip): visitors.csv + card photos. Share it by email, Drive, WhatsApp, USB...
+- Staff panel -> Export (zip): visitors.csv (all leads) + a `leads/<UID - Name - Company>/` folder per lead with details.txt, business-card.jpg and handwritten-note-N photos. Share it by email, Drive, WhatsApp, USB...
 - Staff panel -> Import / merge: pick one or more exports from other phones; duplicates are skipped by UUID.
 - On a PC: `python tools/merge_visitors.py out_dir a.zip b.zip c.zip` -> merged_visitors.csv + photos/.
 

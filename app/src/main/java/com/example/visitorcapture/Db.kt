@@ -42,8 +42,49 @@ data class Visitor(
     val followUpAt: Long = 0,           // follow-up date and time (epoch ms), 0 if none
     val followUpNote: String = "",      // free text when followUpAction is "Remarks"
     val thankYouStatus: String = "",    // "" (no valid e-mail / imported) | PENDING | SENT | FAILED
-    val thankYouSentAt: Long = 0        // epoch ms the thank-you mail was accepted by the SMTP server, 0 if not yet
+    val thankYouSentAt: Long = 0,       // epoch ms the last thank-you mail was accepted by the SMTP server, 0 if never;
+                                        // > 0 on a re-queued record means the next mail is the "updated, final version" one
+    // scheduled factory visit (epoch ms, 0 if none); the Follow-up time lives in followUpAt
+    val factoryVisitAt: Long = 0,
+    // 24-hour reminder mails, separate from the thank-you mail: "" (none) | SCHEDULED | SENT | FAILED (see Reminder)
+    val factoryReminderStatus: String = "",
+    val followUpReminderStatus: String = "",
+    // optional photo of the back of the business card (the front is cardPhotoPath)
+    val cardBackPhotoPath: String? = null,
+    // secondary / third e-mail addresses joined with "; " (the main one is [email]); mails go to all of them
+    val extraEmails: String = "",
+    val website: String = "",            // company website from the card, e.g. www.example.com
+    // secondary / third phone numbers joined with "; " (the main one is [phone])
+    val extraPhones: String = ""
 )
+
+/** The extra addresses as a list (see [Visitor.extraEmails]). */
+fun Visitor.extraEmailList(): List<String> = extraEmails.split(";").map { it.trim() }.filter { it.isNotEmpty() }
+
+/** The extra phone numbers as a list (see [Visitor.extraPhones]). */
+fun Visitor.extraPhoneList(): List<String> = extraPhones.split(";").map { it.trim() }.filter { it.isNotEmpty() }
+
+/**
+ * Tidies the phone fields of a form before saving: blanks and repeats (same last 10 digits) are dropped and the first
+ * remaining number becomes the main one. Returns (main phone, extras joined with "; ").
+ */
+fun splitPhones(main: String, extras: List<String>): Pair<String, String> {
+    val all = (listOf(main) + extras).map { it.trim() }.filter { it.isNotEmpty() }.distinctBy(::phoneKey).take(MAX_PHONES)
+    return all.firstOrNull().orEmpty() to all.drop(1).joinToString("; ")
+}
+
+/** Every address the visitor can be mailed at, main one first; invalid ones and repeats are left out. */
+fun Visitor.mailableEmails(): List<String> =
+    (listOf(email.trim()) + extraEmailList()).filter { ThankYou.isValidEmail(it) }.distinctBy { it.lowercase() }
+
+/**
+ * Tidies the e-mail fields of a form before saving: blanks and repeats are dropped and the first remaining address
+ * becomes the main one. Returns (main e-mail, extras joined with "; ").
+ */
+fun splitEmails(main: String, extras: List<String>): Pair<String, String> {
+    val all = (listOf(main) + extras).map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() }.take(MAX_EMAILS)
+    return all.firstOrNull().orEmpty() to all.drop(1).joinToString("; ")
+}
 
 /** Staff who have logged in on this phone by scanning their vCard QR code. */
 @Entity(tableName = "employees", indices = [Index(value = ["empKey"], unique = true)])
@@ -73,8 +114,20 @@ interface VisitorDao {
     @Query("UPDATE visitors SET thankYouStatus = 'QUEUED' WHERE thankYouStatus = 'PENDING'") suspend fun queueAllThankYou(): Int
     @Query("UPDATE visitors SET thankYouStatus = :status, thankYouSentAt = :at WHERE uid = :uid")
     suspend fun markThankYou(uid: String, status: String, at: Long)
+    /** Changes only the status. thankYouSentAt is kept, so a record that was mailed before still sends the "updated" version. */
+    @Query("UPDATE visitors SET thankYouStatus = :status WHERE uid = :uid")
+    suspend fun setThankYouStatus(uid: String, status: String)
+    @Query("SELECT * FROM visitors WHERE factoryReminderStatus = 'SCHEDULED' OR followUpReminderStatus = 'SCHEDULED'")
+    suspend fun scheduledReminders(): List<Visitor>
+    @Query("UPDATE visitors SET factoryReminderStatus = :status WHERE uid = :uid") suspend fun setFactoryReminder(uid: String, status: String)
+    @Query("UPDATE visitors SET followUpReminderStatus = :status WHERE uid = :uid") suspend fun setFollowUpReminder(uid: String, status: String)
+    @Query("SELECT * FROM visitors WHERE uid = :uid") suspend fun byUid(uid: String): Visitor?
     @Query("SELECT * FROM visitors ORDER BY createdAt DESC") fun all(): Flow<List<Visitor>>
     @Query("SELECT COUNT(*) FROM visitors WHERE uid LIKE :prefix || '%'") suspend fun countUidPrefix(prefix: String): Int
+    /** Profile edited: visits this staff member attended on this phone follow the corrected details. */
+    @Query("UPDATE visitors SET attendedByKey = :newKey, attendedByName = :name, attendedByTitle = :title, " +
+        "attendedByEmail = :email, attendedByPhone = :phone WHERE attendedByKey = :oldKey")
+    suspend fun renameStaff(oldKey: String, newKey: String, name: String, title: String, email: String, phone: String): Int
 }
 
 /** Readable UID: STAFF3-dd-HHmm-NNNN, e.g. SIV-13-0922-0001(also the photo file name in exports). */
@@ -99,6 +152,11 @@ abstract class EmployeeDao {
                                email: String, phone: String, vcard: String, at: Long)
 
     @Query("SELECT * FROM employees ORDER BY lastLoginAt DESC") abstract fun all(): Flow<List<Employee>>
+
+    @Query("UPDATE employees SET empKey = :newKey, name = :name, title = :title, company = :company, " +
+        "email = :email, phone = :phone WHERE empKey = :oldKey")
+    abstract suspend fun edit(oldKey: String, newKey: String, name: String, title: String, company: String,
+                              email: String, phone: String): Int
 
     /** First login adds the person; later logins refresh their details and last-login time. */
     @Transaction
@@ -161,7 +219,44 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
-@Database(entities = [Visitor::class, Employee::class], version = 7, exportSchema = false)
+/** v7 -> v8: factory visit time and the two 24-hour reminder mail statuses. Existing rows stay blank: nothing is mailed retroactively. */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `factoryVisitAt` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `factoryReminderStatus` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `followUpReminderStatus` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+/** v8 -> v9: optional photo of the back of the business card. Existing rows have none. */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `cardBackPhotoPath` TEXT")
+    }
+}
+
+/** v9 -> v10: secondary / third e-mail addresses. Existing rows have none. */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `extraEmails` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+/** v10 -> v11: company website. Existing rows have none. */
+val MIGRATION_10_11 = object : Migration(10, 11) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `website` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+/** v11 -> v12: secondary / third phone numbers. Existing rows have none. */
+val MIGRATION_11_12 = object : Migration(11, 12) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `extraPhones` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+@Database(entities = [Visitor::class, Employee::class], version = 12, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): VisitorDao
     abstract fun employeeDao(): EmployeeDao
@@ -169,7 +264,7 @@ abstract class AppDb : RoomDatabase() {
         @Volatile private var inst: AppDb? = null
         fun get(c: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(c.applicationContext, AppDb::class.java, "visitors.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
                 .build().also { inst = it }
         }
     }
