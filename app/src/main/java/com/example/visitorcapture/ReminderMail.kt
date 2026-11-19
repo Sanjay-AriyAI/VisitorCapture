@@ -96,7 +96,7 @@ object ReminderMail {
         if (p.isNotEmpty()) sb.append("Purpose of visit: ").append(p.joinToString(", ")).append('\n')
         val interests = Catalog.summarize(v.products.split("; ").filter { it.isNotBlank() })
         interests.lines().filter { it.isNotBlank() }.forEach { sb.append("  - ").append(it.trim()).append('\n') }
-        if (v.products.contains("Other Products") && v.otherDetail.isNotBlank()) sb.append("  - Other: ").append(v.otherDetail.trim()).append('\n')
+        if (Brand.otherProduct?.let { v.products.contains(it) } == true && v.otherDetail.isNotBlank()) sb.append("  - Other: ").append(v.otherDetail.trim()).append('\n')
         if (v.additionalInterest.isNotBlank()) sb.append("  - ").append(v.additionalInterest.trim()).append('\n')
         sb.append('\n')
 

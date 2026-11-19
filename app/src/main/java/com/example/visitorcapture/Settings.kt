@@ -219,7 +219,7 @@ fun AboutScreen(deviceName: String, visitorCount: Int, onBack: () -> Unit) = Sec
     val debug = (ctx.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
     Column(Modifier.fillMaxWidth().padding(top = 20.dp), horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        NarenLogo(Modifier.width(220.dp))
+        BrandLogo(Modifier.width(220.dp))
         Text("Visitor Capture", fontSize = 24.sp, fontWeight = FontWeight.Bold, fontFamily = Display, color = LineC)
         Text("Version ${BuildConfig.VERSION_NAME}" + if (debug) " (debug)" else "", color = Steel)
     }

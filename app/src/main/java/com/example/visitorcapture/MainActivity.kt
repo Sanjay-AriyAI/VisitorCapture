@@ -60,7 +60,7 @@ import java.util.*
 
 val CUSTOMER_TYPES = listOf("OEM", "End User", "Agent", "Distributor")
 val MARKET_EXPOSURE = listOf("Domestic Visitor", "International Visitor")
-val PRODUCTS = listOf("Mechanical Spares", "Electronics Spares", "Retrofits", "Other Products")
+val PRODUCTS get() = Brand.products
 val LEAD_OUTCOMES = listOf("Product Enquiry", "Sample Request", "General Enquiry", "Order", "Factory Visit", "Follow-up")
 val REMARK_OPTIONS = listOf("Call Back", "Factory Visit", "Need Follow-up", "Others")
 const val MAX_NOTE_PHOTOS = 5   // handwritten-enquiry images per visit
@@ -116,7 +116,7 @@ fun App() {
     var appSettings by remember { mutableStateOf(AppSettings.load(prefs)) }
     var confirmDiscard by remember { mutableStateOf(false) }
     var mailSuccess by remember { mutableStateOf<String?>(null) }                // "test mail sent" pop-up on the home screen
-    var catalogProduct by remember { mutableStateOf("Mechanical Spares") }
+    var catalogProduct by remember { mutableStateOf(Brand.products.first()) }
     var form by remember { mutableStateOf(Form()) }
     var photoFile by remember { mutableStateOf<File?>(null) }
     var photoTaken by remember { mutableStateOf(false) }
@@ -517,7 +517,7 @@ fun App() {
                                 listOf(Amber.copy(alpha = if (IsDark) 0.18f else 0.14f), androidx.compose.ui.graphics.Color.Transparent),
                                 radius = 720f)))
                             Centered {
-                                NarenLogo(Modifier.width(220.dp))
+                                BrandLogo(Modifier.width(220.dp))
                                 Text("Welcome to\nour stand", style = MaterialTheme.typography.displayMedium,
                                     textAlign = TextAlign.Center, color = LineC)
                                 Text("Scan your business card and we'll log your visit & interests in under a minute.",
@@ -705,15 +705,20 @@ fun App() {
                             Text("Product profile", fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
                             Text("Tap a product, then choose machines, makes and models. You can pick several.", color = Steel)
                             TileGrid(PRODUCTS.map { p ->
-                                val c = form.products.count { it.startsWith("$p > ") }
-                                TileItem(p,
-                                    when (p) {
-                                        "Mechanical Spares" -> Icons.Default.Build; "Electronics Spares" -> Icons.Default.Memory
-                                        "Retrofits" -> Icons.Default.Autorenew; else -> Icons.Default.Inventory2
-                                    },
-                                    c > 0, if (c > 0) "$c selected  ›" else "Choose  ›")
-                            }) { k -> catalogProduct = k; screen = Screen.Catalog }
-                            if (form.products.any { it.startsWith("Other Products > ") })
+                                if (Catalog.machinesFor(p).isEmpty()) {   // nothing under it: the tile itself is the tick
+                                    val on = p in form.products
+                                    TileItem(p, Brand.productIcon(p), on, if (on) "Selected" else "Tap to select")
+                                } else {
+                                    val c = form.products.count { it.startsWith("$p > ") }
+                                    TileItem(p, Brand.productIcon(p), c > 0, if (c > 0) "$c selected  ›" else "Choose  ›")
+                                }
+                            }) { k ->
+                                if (Catalog.machinesFor(k).isEmpty())
+                                    form = form.copy(products = if (k in form.products) form.products - k else form.products + k)
+                                else { catalogProduct = k; screen = Screen.Catalog }
+                            }
+                            val other = Brand.otherProduct
+                            if (other != null && form.products.any { it == other || it.startsWith("$other > ") })
                                 OutlinedTextField(form.otherDetail, { form = form.copy(otherDetail = it) },
                                     placeholder = { Text("Tell us more about what you're after") },
                                     modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())

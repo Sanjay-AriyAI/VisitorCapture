@@ -13,11 +13,26 @@ plugins {
 //   smtp.password=<app password>
 //   smtp.from=visitors@yourcompany.com
 //   smtp.fromName=Naren Group
+// Prefix a key with the flavor name to set it for one company only, e.g. simta.smtp.user=visitors@simta.com
 val localProps = Properties().apply {
     val f = rootProject.file("local.properties")
     if (f.exists()) f.inputStream().use { load(it) }
 }
-fun smtp(key: String, default: String = "") = "\"" + (localProps.getProperty("smtp.$key") ?: default).replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+fun prop(flavor: String, key: String): String? = localProps.getProperty("$flavor.smtp.$key") ?: localProps.getProperty("smtp.$key")
+fun smtp(flavor: String, key: String, default: String = "") =
+    "\"" + (prop(flavor, key) ?: default).replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+/** Per company: launcher name and default mail account. Branding and catalogue live in src/<flavor>/ (see BrandSpec.kt). */
+fun com.android.build.api.dsl.ApplicationProductFlavor.company(flavor: String, appName: String, companyName: String) {
+    dimension = "company"
+    resValue("string", "app_name", appName)
+    buildConfigField("String", "SMTP_HOST", smtp(flavor, "host"))
+    buildConfigField("int", "SMTP_PORT", (prop(flavor, "port") ?: "587").trim())
+    buildConfigField("String", "SMTP_USER", smtp(flavor, "user"))
+    buildConfigField("String", "SMTP_PASSWORD", smtp(flavor, "password"))
+    buildConfigField("String", "SMTP_FROM", smtp(flavor, "from"))
+    buildConfigField("String", "SMTP_FROM_NAME", smtp(flavor, "fromName", companyName))
+}
 
 android {
     namespace = "com.example.visitorcapture"
@@ -28,14 +43,15 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
-        buildConfigField("String", "SMTP_HOST", smtp("host"))
-        buildConfigField("int", "SMTP_PORT", (localProps.getProperty("smtp.port") ?: "587").trim())
-        buildConfigField("String", "SMTP_USER", smtp("user"))
-        buildConfigField("String", "SMTP_PASSWORD", smtp("password"))
-        buildConfigField("String", "SMTP_FROM", smtp("from"))
-        buildConfigField("String", "SMTP_FROM_NAME", smtp("fromName", "Naren Group"))
     }
-    buildFeatures { compose = true; buildConfig = true }
+    // One codebase, one APK per company: gradlew assembleNarenRelease / assembleSimtaRelease
+    flavorDimensions += "company"
+    productFlavors {
+        // Naren keeps the original applicationId so installed tablets update in place and keep their visitor data.
+        create("naren") { company("naren", "Naren Visitor Capture", "Naren Group") }
+        create("simta") { company("simta", "SIMTA Visitor Capture", "SIMTA"); applicationIdSuffix = ".simta" }
+    }
+    buildFeatures { compose = true; buildConfig = true; resValues = true }
     packaging {
         resources.excludes += setOf("META-INF/NOTICE.md", "META-INF/LICENSE.md", "META-INF/LICENSE", "META-INF/NOTICE",
             "META-INF/DEPENDENCIES", "META-INF/LICENSE.txt", "META-INF/NOTICE.txt")

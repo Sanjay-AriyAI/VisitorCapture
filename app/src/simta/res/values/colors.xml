@@ -1,0 +1,4 @@
+<resources>
+    <!-- TODO(simta): SIMTA brand colour; keep in step with Brand.colors.bg -->
+    <color name="brand_bg">#FF1F4E8C</color>
+</resources>

@@ -23,11 +23,11 @@ class ThankYouTest {
     @Test fun bodyIsPersonalisedFromTheVisit() {
         val b = ThankYou.body(visitor(), "Naren Group")
         assertTrue(b.startsWith("Dear Anil Kumar,"))
-        assertTrue(b.contains("A BIG THANK YOU FOR CONNECTING WITH NAREN AT INDIA ITME 2026!"))
+        assertTrue(b.contains(Brand.intro.first().first))
         assertTrue(b.contains("Carding"))
         assertTrue(b.contains("Control panel PLC conversion"))
         assertTrue(b.contains("+91 90000 11111"))
-        assertTrue(b.trimEnd().endsWith("Warm regards,\nTEAM NAREN"))
+        assertTrue(b.trimEnd().endsWith("Warm regards,\n${Brand.signature}"))
         assertFalse(b.contains("Sales Manager"))
     }
 
@@ -35,7 +35,7 @@ class ThankYouTest {
         val b = ThankYou.body(visitor().copy(name = "", company = "", products = "", attendedByName = "", attendedByPhone = ""), "Naren Group")
         assertTrue(b.startsWith("Dear Sir/Madam,"))
         assertFalse(b.contains("You showed interest"))
-        assertTrue(b.contains("TEAM NAREN"))
+        assertTrue(b.contains(Brand.signature))
     }
 
     private fun fullVisitor() = visitor().copy(title = "Purchase Head", phone = "+91 98765 43210",
@@ -50,7 +50,7 @@ class ThankYouTest {
 
     @Test fun htmlBodyCarriesTheVisitAndOurCompanyDetails() {
         val h = ThankYou.htmlBody(fullVisitor(), "Naren Group", ThankYou.LOGO_CID, info = naren)
-        listOf("Anil Kumar", "INDIA ITME 2026", "Catalogue Link: To be updated shortly.", "TEAM NAREN", "OEM", "Domestic Visitor",
+        listOf("Anil Kumar", Brand.intro.first().first, Brand.signature, "OEM", "Domestic Visitor",
             "Mechanical Spares", "Carding", "Retrofits", "Blow Room", "Control panel PLC conversion",
             "Spindle tapes, 200 nos", "Product Enquiry", "Sample Request", "quotation", "Priya Rao", "Sales Manager",
             "Contact us", "1, Mill Road<br>Coimbatore 641014", "tel:+914220000000", "mailto:sales@naren.example",

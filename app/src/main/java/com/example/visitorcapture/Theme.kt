@@ -30,14 +30,7 @@ data class AppColors(
     val isDark: Boolean
 )
 
-/** The one app theme: brand teal #18A99F with white text and amber accents. */
-val TealColors = AppColors(
-    bg = Color(0xFF18A99F), bgDeep = Color(0xFF0E8A81), card = Color(0xFF12968D), cardActive = Color(0xFF0F8279),
-    text = Color(0xFFFFFFFF), textDim = Color(0xFFE3F6F4), muted = Color(0xFFC2EAE6),
-    accent = Color(0xFFE8A33D), accentText = Color(0xFFFFD27A), onAccent = Color(0xFF0B2033),
-    danger = Color(0xFFC0563F), dangerText = Color(0xFFFFE1D9), outline = Color(0x40FFFFFF), isDark = true)
-
-val LocalAppColors = staticCompositionLocalOf { TealColors }
+val LocalAppColors = staticCompositionLocalOf { Brand.colors }
 
 /** Plus Jakarta Sans, bundled in res/font (SIL Open Font License, see assets/licenses). */
 val Jakarta = FontFamily(
@@ -74,7 +67,7 @@ val AppShapes = Shapes(
 /** Brand theme: tokens + a matching Material scheme, so dialogs, pickers, chips and menus follow the app's colours. */
 @Composable
 fun VisitorTheme(content: @Composable () -> Unit) {
-    val c = TealColors
+    val c = Brand.colors
     val scheme = darkColorScheme(
         primary = c.accent, onPrimary = c.onAccent, primaryContainer = c.cardActive, onPrimaryContainer = c.text,
         secondary = c.textDim, onSecondary = c.bgDeep, secondaryContainer = c.cardActive, onSecondaryContainer = c.text,

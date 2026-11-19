@@ -28,7 +28,7 @@ fun AppDrawer(
         Column(Modifier.fillMaxHeight().padding(horizontal = 12.dp, vertical = 16.dp)) {
             // header: brand + signed-in staff member
             Column(Modifier.padding(horizontal = 12.dp)) {
-                NarenLogo(Modifier.height(38.dp), compact = true)
+                BrandLogo(Modifier.height(38.dp), compact = true)
                 Spacer(Modifier.height(18.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Avatar(employee?.name.orEmpty())

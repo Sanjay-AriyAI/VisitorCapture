@@ -149,21 +149,11 @@ object ThankYou {
         return sb.toString()
     }
 
-    /** Fixed sign-off under "Warm regards". */
-    const val SIGNATURE = "TEAM NAREN"
+    /** Fixed sign-off under "Warm regards" (per company, see Brand). */
+    val SIGNATURE get() = Brand.signature
 
-    /** Opening text of the mail, paragraph by paragraph; true marks a headline (bold in the HTML mail). */
-    val INTRO = listOf(
-        "A BIG THANK YOU FOR CONNECTING WITH NAREN AT INDIA ITME 2026!" to true,
-        "It was a pleasure welcoming you to the NAREN Group Pavilion at Greater Noida. We sincerely appreciate your valuable " +
-            "time, interest, and the opportunity to connect with you." to false,
-        "We believe great partnerships begin with meaningful connections and look forward to building a strong and lasting " +
-            "business relationship." to false,
-        "DISCOVER THE WORLD OF NAREN!" to true,
-        "Explore our product catalogue through the link below and discover our range of innovative textile machinery solutions." to false,
-        "Catalogue Link: To be updated shortly." to false,
-        "Thank you for being part of our journey!" to false,
-        "LET'S CONNECT, COLLABORATE & GROW TOGETHER!" to true)
+    /** Opening text of the mail, paragraph by paragraph; true marks a headline (bold in the HTML mail). Per company, see Brand. */
+    val INTRO get() = Brand.intro
 
     /** The exhibitor's own contact block (name, address, phone, e-mail, website as links); "" when nothing was entered. */
     internal fun companyHtml(company: String, info: CompanyInfo): String {
@@ -234,7 +224,7 @@ object ThankYou {
                 """<li style="margin:0 0 6px 0;"><span style="color:$NAVY;font-weight:600;">${esc(machine)}</span>""" +
                     (if (more.isEmpty()) "" else """<span style="color:$MUTED;"> — ${esc(more.joinToString(", "))}</span>""") + "</li>"
             }
-            val extra = if (product == "Other Products" && v.otherDetail.isNotBlank())
+            val extra = if (product == Brand.otherProduct && v.otherDetail.isNotBlank())
                 """<div style="color:$MUTED;font-size:13px;margin:4px 0 0 0;">${escLines(v.otherDetail)}</div>""" else ""
             """<div style="font-family:$FONT;margin:14px 0 0 0;padding:12px 14px;background:#FAFBFC;border:1px solid $RULE;border-left:4px solid $AMBER;border-radius:6px;">
               <div style="color:$NAVY;font-size:15px;font-weight:700;">${esc(product)}</div>
@@ -381,7 +371,7 @@ object ThankYou {
 
     /** Company logo for the mail header, or null if it can't be read (the mail then shows the company name instead). */
     fun loadLogo(ctx: Context): ByteArray? = try {
-        ctx.resources.openRawResource(R.drawable.naren_logo).use { it.readBytes() }
+        Brand.logo?.let { id -> ctx.resources.openRawResource(id).use { it.readBytes() } }
     } catch (e: Exception) { null }
 
     /** Blocking SMTP send; throws javax.mail.MessagingException on any failure. */

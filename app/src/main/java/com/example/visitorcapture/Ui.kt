@@ -105,7 +105,7 @@ fun ProgressRail(step: Int, labels: List<String>, attendedBy: String?,
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             leading()
             Spacer(Modifier.width(4.dp))
-            NarenLogo(Modifier.height(34.dp), compact = true)
+            BrandLogo(Modifier.height(34.dp), compact = true)
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text("Visitor Log", color = LineC, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
@@ -339,21 +339,29 @@ fun Pill(text: String, color: Color = Amber, textColor: Color = if (color == Amb
             .padding(horizontal = 10.dp, vertical = 4.dp))
 
 /**
- * Dark theme: the white-lettered logo (naren_logo_dark) straight on the dark background.
- * Light theme: the navy-lettered logo (naren_logo) on a white plate. The e-mail header also uses naren_logo, since
- * white letters would vanish on its white background.
+ * The company's logo (see [Brand]).
+ * Dark theme: the light-lettered logo (Brand.logoOnDark) straight on the dark background.
+ * Light theme, or no light-lettered logo: the dark-lettered logo (Brand.logo) on a white plate. The e-mail header also
+ * uses Brand.logo, since light letters would vanish on its white background.
+ * No logo at all: the company name as text.
  */
 @Composable
-fun NarenLogo(modifier: Modifier = Modifier, compact: Boolean = false) {
+fun BrandLogo(modifier: Modifier = Modifier, compact: Boolean = false) {
     val shape = RoundedCornerShape(if (compact) 8.dp else 16.dp)
     val inset = Modifier.padding(horizontal = if (compact) 8.dp else 18.dp, vertical = if (compact) 4.dp else 14.dp)
-    if (IsDark)
-        Image(painterResource(R.drawable.naren_logo_dark), "Naren - Empowering quality and trust",
-            modifier.then(inset), contentScale = ContentScale.Fit)
-    else
-        Image(painterResource(R.drawable.naren_logo), "Naren - Empowering quality and trust",
-            modifier.border(1.dp, Outline, shape).clip(shape).background(Color.White).then(inset),
-            contentScale = ContentScale.Fit)
+    val onDark = Brand.logoOnDark
+    val plain = Brand.logo
+    when {
+        IsDark && onDark != null ->
+            Image(painterResource(onDark), Brand.logoDescription, modifier.then(inset), contentScale = ContentScale.Fit)
+        plain != null ->
+            Image(painterResource(plain), Brand.logoDescription,
+                modifier.border(1.dp, Outline, shape).clip(shape).background(Color.White).then(inset),
+                contentScale = ContentScale.Fit)
+        else ->
+            Text(Brand.name, modifier.then(inset), fontFamily = Display, fontWeight = FontWeight.ExtraBold,
+                fontSize = if (compact) 20.sp else 36.sp, color = LineC, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
 }
 
 /** Small number tile (Welcome screen): big value and label. */

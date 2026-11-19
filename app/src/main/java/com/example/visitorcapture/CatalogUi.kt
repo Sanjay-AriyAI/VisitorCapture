@@ -41,11 +41,7 @@ fun CatalogScreen(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Text(product, fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
-            Text(when (product) {
-                "Retrofits" -> "Tap a machine, then tick the retrofits wanted under each make."
-                "Other Products" -> "Tap every spare part the visitor is interested in."
-                else -> "Tap a machine, then tick every make or model you deal with."
-            }, color = Steel)
+            Text(Brand.catalogHint(product), color = Steel)
             machines.forEach { m ->
                 val all = Catalog.paths(product, m)
                 val ticked = all.count { it in selected }
