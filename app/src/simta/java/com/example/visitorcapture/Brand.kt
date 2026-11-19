@@ -13,19 +13,20 @@ import androidx.compose.ui.graphics.Color
 /** SIMTA build. */
 object Brand : BrandSpec {
     override val name = "SIMTA"
-    override val logoDescription = "SIMTA"
-    // TODO(simta): add src/simta/res/drawable-nodpi/simta_logo.png (dark letters, transparent background) and
-    // simta_logo_dark.png (light letters), then set these to R.drawable.simta_logo / R.drawable.simta_logo_dark.
-    // Until then the app and the mail header show the name as text.
-    override val logo: Int? = null
+    override val logoDescription = "SIMTA Jacobi"
+    // Always shown on its white plate: straight on the background the logo's blue frame melts into the page.
+    override val logo: Int? = R.drawable.simta_logo
     override val logoOnDark: Int? = null
 
-    // TODO(simta): placeholder palette (deep blue + amber). Replace with SIMTA's brand colours; keep
-    // res/values/colors.xml brand_bg in step with [AppColors.bg] so the launch window matches.
+    /**
+     * Deep navy page so the SIMTA logo blue (#01A0E2) stands out; that blue is the accent (buttons, progress rail),
+     * with dark navy text on it for contrast.
+     * Keep res/values/colors.xml brand_bg in step with [AppColors.bg] so the launch window matches.
+     */
     override val colors = AppColors(
-        bg = Color(0xFF1F4E8C), bgDeep = Color(0xFF173D6E), card = Color(0xFF1A4579), cardActive = Color(0xFF153A66),
-        text = Color(0xFFFFFFFF), textDim = Color(0xFFE2EAF5), muted = Color(0xFFBCCBE0),
-        accent = Color(0xFFE8A33D), accentText = Color(0xFFFFD27A), onAccent = Color(0xFF0B2033),
+        bg = Color(0xFF0E2A47), bgDeep = Color(0xFF0A1F36), card = Color(0xFF15365A), cardActive = Color(0xFF1B4270),
+        text = Color(0xFFFFFFFF), textDim = Color(0xFFDCE8F5), muted = Color(0xFFA9BED6),
+        accent = Color(0xFF01A0E2), accentText = Color(0xFF5CC8F5), onAccent = Color(0xFF04172A),
         danger = Color(0xFFC0563F), dangerText = Color(0xFFFFE1D9), outline = Color(0x40FFFFFF), isDark = true)
 
     override val signature = "TEAM SIMTA"
