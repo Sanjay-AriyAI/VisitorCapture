@@ -44,6 +44,22 @@ android {
         versionCode = 1
         versionName = "1.0"
     }
+    // Release signing: keystore + passwords live in local.properties (git-ignored), never in source:
+    //   release.storeFile=visitorcapture-release.jks   (path relative to the project root)
+    //   release.storePassword=...  release.keyAlias=...  release.keyPassword=...
+    // Without a signature Android rejects the APK with "App not installed as package appears to be invalid".
+    val releaseStore = localProps.getProperty("release.storeFile")?.let { rootProject.file(it) }
+    signingConfigs {
+        if (releaseStore != null && releaseStore.exists()) create("release") {
+            storeFile = releaseStore
+            storePassword = localProps.getProperty("release.storePassword")
+            keyAlias = localProps.getProperty("release.keyAlias")
+            keyPassword = localProps.getProperty("release.keyPassword")
+        }
+    }
+    buildTypes {
+        getByName("release") { signingConfigs.findByName("release")?.let { signingConfig = it } }
+    }
     // One codebase, one APK per company: gradlew assembleNarenRelease / assembleSimtaRelease
     flavorDimensions += "company"
     productFlavors {
