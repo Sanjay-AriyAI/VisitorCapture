@@ -26,7 +26,7 @@ internal object NarenCatalog {
             sec("Savio", "Espero", "Orion", "Polar", "Eco Pulsar"),
             sec("Murata", "21C", "Qpro/Qpro+", "QproEX", "AI Cone"),
             sec("Others", "Others")),
-        m("TFO", brands("Murata", "Savio", "Veejay", "Others")),
+        m("TFO", brands("Murata", "Savio", "Veejay", "Volkman", "Others")),
         m("SSM Winding", brands("Xeno", "XENO-YW", "XENO1", "XENO2")),
         m("Open-End", brands("Rieter", "Saurer", "Titan", "Others")),
         m("OHTC", brands(*OHTC)),
@@ -106,7 +106,7 @@ internal object NarenCatalog {
             m("TFO", brands("Murata", "Savio", "Veejay", "Volkman", "Others")),
             m("Splicers", brands("110", "114", "115", "116", "490L", "498", "590L", "690", "698", "845", "895",
                 "4923A", "4923B", "4923E", "4941A", "Chinese")),
-            m("Mesdan Knotter", brands("L22/30I", "L-24/302", "L-26", "L-26/304", "L-30/213", "A061", "B063", "C064"))
+            m("Mesdan Knotter", brands("L22/30I", "L-24/302", "L-26/304", "L-30/213", "A061", "B063", "C064"))
         ) else listOf(it)
     }
 
