@@ -128,6 +128,8 @@ fun App() {
     // Per-field "please check" notes from the card reader; a note disappears as soon as the visitor edits that field.
     var fieldHints by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var nameError by remember { mutableStateOf(false) }                       // Continue tapped with no name: show the error
+    var emailTried by remember { mutableStateOf(false) }                      // Continue tapped: show e-mail format errors
+    fun emailErr(s: String) = if (emailTried && s.isNotBlank() && !ThankYou.isValidEmail(s)) "Enter a valid e-mail (e.g. name@company.com)" else null
     // What the scanner actually read, shown only in debug builds so a wrong field can be traced to its cause.
     var ocrRaw by remember { mutableStateOf("") }
     var showRaw by remember { mutableStateOf(false) }
@@ -161,7 +163,7 @@ fun App() {
         lastUid = null; extraNote = ""; extraSaved = ""
         notePhotos = emptyList(); pendingNote = null; noteBusy = false; noteError = null
         form = Form(); photoFile = null; photoTaken = false; backFile = null; backTaken = false
-        ocrError = false; fieldHints = emptyMap(); nameError = false; visitStart = 0L; screen = Screen.Welcome
+        ocrError = false; fieldHints = emptyMap(); nameError = false; emailTried = false; visitStart = 0L; screen = Screen.Welcome
     }
 
     /** Manual entry: forget any card photos taken for this visit. */
@@ -628,12 +630,12 @@ fun App() {
                             }
                             FormSection("Company & contact", Icons.Default.Business) {
                                 PaperField("Company", form.company, Icons.Default.Apartment, hint = fieldHints["company"], caps = KeyboardCapitalization.Words) { form = form.copy(company = it); fieldHints = fieldHints - "company" }
-                                PaperField("Phone", form.phone, Icons.Default.Phone, hint = fieldHints["phone"], keyboard = KeyboardType.Phone) { form = form.copy(phone = it); fieldHints = fieldHints - "phone" }
+                                PaperField("Phone", form.phone, Icons.Default.Phone, hint = fieldHints["phone"], keyboard = KeyboardType.Phone) { form = form.copy(phone = it.filter(Char::isDigit)); fieldHints = fieldHints - "phone" }
                                 // Extra numbers: filled when the card shows more than one, or added by hand (max MAX_PHONES in all).
                                 form.extraPhones.forEachIndexed { i, num ->
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         PaperField(EXTRA_PHONE_LABELS[i], num, Icons.Default.Call, Modifier.weight(1f), keyboard = KeyboardType.Phone) { v ->
-                                            form = form.copy(extraPhones = form.extraPhones.toMutableList().also { it[i] = v })
+                                            form = form.copy(extraPhones = form.extraPhones.toMutableList().also { it[i] = v.filter(Char::isDigit) })
                                         }
                                         IconButton({ form = form.copy(extraPhones = form.extraPhones.filterIndexed { j, _ -> j != i }) }) {
                                             Icon(Icons.Default.Close, "Remove ${EXTRA_PHONE_LABELS[i].lowercase()}", tint = Steel)
@@ -644,11 +646,11 @@ fun App() {
                                     LinkButton(if (form.extraPhones.isEmpty()) "+ Add secondary phone" else "+ Add another phone") {
                                         form = form.copy(extraPhones = form.extraPhones + "")
                                     }
-                                PaperField("E-mail", form.email, Icons.Default.Email, hint = fieldHints["email"], keyboard = KeyboardType.Email) { form = form.copy(email = it); fieldHints = fieldHints - "email" }
+                                PaperField("E-mail", form.email, Icons.Default.Email, hint = fieldHints["email"], keyboard = KeyboardType.Email, error = emailErr(form.email)) { form = form.copy(email = it); fieldHints = fieldHints - "email" }
                                 // Extra addresses: filled when the card shows more than one, or added by hand (max MAX_EMAILS in all).
                                 form.extraEmails.forEachIndexed { i, mail ->
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        PaperField(EXTRA_EMAIL_LABELS[i], mail, Icons.Default.AlternateEmail, Modifier.weight(1f), keyboard = KeyboardType.Email) { v ->
+                                        PaperField(EXTRA_EMAIL_LABELS[i], mail, Icons.Default.AlternateEmail, Modifier.weight(1f), keyboard = KeyboardType.Email, error = emailErr(mail)) { v ->
                                             form = form.copy(extraEmails = form.extraEmails.toMutableList().also { it[i] = v })
                                         }
                                         IconButton({ form = form.copy(extraEmails = form.extraEmails.filterIndexed { j, _ -> j != i }) }) {
@@ -676,7 +678,13 @@ fun App() {
                                 { PrimaryButton("Continue", trailingIcon = Icons.AutoMirrored.Filled.ArrowForward) {
                                     // the visitor's name is mandatory
                                     if (form.name.isBlank()) { nameError = true; scope.launch { snackbar.showSnackbar("Enter the visitor's full name to continue") } }
-                                    else { nameError = false; screen = Screen.Customer }
+                                    else {
+                                        nameError = false
+                                        emailTried = true
+                                        if ((listOf(form.email) + form.extraEmails).any { it.isNotBlank() && !ThankYou.isValidEmail(it) })
+                                            scope.launch { snackbar.showSnackbar("Enter a valid e-mail address to continue") }
+                                        else screen = Screen.Customer
+                                    }
                                 } })
                         }
                         Screen.Customer -> Scrolling {
