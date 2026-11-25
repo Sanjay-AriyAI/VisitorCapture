@@ -520,7 +520,7 @@ fun App() {
                                 radius = 720f)))
                             Centered {
                                 BrandLogo(Modifier.width(220.dp))
-                                Text("Welcome to\nour stand", style = MaterialTheme.typography.displayMedium,
+                                Text("Welcome to\nour stall", style = MaterialTheme.typography.displayMedium,
                                     textAlign = TextAlign.Center, color = LineC)
                                 Text("Scan your business card and we'll log your visit & interests in under a minute.",
                                     color = Steel, textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyLarge)
