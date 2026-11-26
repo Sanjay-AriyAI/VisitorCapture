@@ -114,6 +114,9 @@ interface VisitorDao {
     @Query("UPDATE visitors SET thankYouStatus = 'QUEUED' WHERE thankYouStatus = 'PENDING'") suspend fun queueAllThankYou(): Int
     @Query("UPDATE visitors SET thankYouStatus = :status, thankYouSentAt = :at WHERE uid = :uid")
     suspend fun markThankYou(uid: String, status: String, at: Long)
+    /** Automatic send: queues one visitor, unless it was already queued or mailed in the meantime. */
+    @Query("UPDATE visitors SET thankYouStatus = 'QUEUED' WHERE uid = :uid AND thankYouStatus = 'PENDING'")
+    suspend fun queueThankYou(uid: String)
     /** Changes only the status. thankYouSentAt is kept, so a record that was mailed before still sends the "updated" version. */
     @Query("UPDATE visitors SET thankYouStatus = :status WHERE uid = :uid")
     suspend fun setThankYouStatus(uid: String, status: String)

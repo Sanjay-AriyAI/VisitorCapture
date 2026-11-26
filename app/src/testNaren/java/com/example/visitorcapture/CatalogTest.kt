@@ -35,6 +35,21 @@ class CatalogTest {
         assertEquals(listOf("Rieter", "Saurer", "Titan", "Others"), openEnd("Electronics Spares"))
     }
 
+    @Test fun electronicClearerFollowsWindingInElectronicsOnly() {
+        val electronics = Catalog.machinesFor("Electronics Spares")
+        val eyc = electronics[electronics.indexOfFirst { it.name == "Winding" } + 1]
+        assertEquals("Electronic Clearer (EYC)", eyc.name)
+        assertEquals(listOf("Uster", "Loepfe", "Premier"), eyc.sections.single().items)
+        assertTrue(Catalog.machinesFor("Mechanical Spares").none { it.name == eyc.name })
+    }
+
+    @Test fun eachDefaultContactIsItsOwnLinkInTheMail() {
+        val h = ThankYou.companyHtml("Naren Group", Brand.companyDefaults)
+        listOf("tel:+919842991141\"", "tel:+919965516076\"", "mailto:export@narenonline.com\"",
+            "mailto:customerssupport@narenonline.com\"", "href=\"https://narengroup.in\"")
+            .forEach { assertTrue("missing: $it", h.contains(it)) }
+    }
+
     @Test fun otherProductsCardsAreTheirOwnPaths() {
         assertEquals(listOf("Other Products > Carding Belts", "Other Products > Ceramic Scissors",
             "Other Products > Direct Coupling", "Other Products > HMI Conversion"),

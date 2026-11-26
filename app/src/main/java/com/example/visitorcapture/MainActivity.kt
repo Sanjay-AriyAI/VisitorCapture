@@ -158,8 +158,23 @@ fun App() {
         scope.launch { db.dao().setNotePhotos(uid, paths) }
     }
 
+    // "Send automatically": the mail is queued on leaving the Done screen, so what was added there goes with it.
+    var mailAfterDone by remember { mutableStateOf(false) }
+    fun releaseMail() {
+        val uid = lastUid ?: return
+        if (!mailAfterDone) return
+        mailAfterDone = false
+        val note = extraNote.trim()
+        scope.launch {
+            db.dao().setAdditionalInterest(uid, note)
+            db.dao().queueThankYou(uid)
+            ThankYouWorker.enqueue(ctx)
+        }
+    }
+
     fun reset() {
         persistExtra()
+        releaseMail()
         lastUid = null; extraNote = ""; extraSaved = ""
         notePhotos = emptyList(); pendingNote = null; noteBusy = false; noteError = null
         form = Form(); photoFile = null; photoTaken = false; backFile = null; backTaken = false
@@ -320,15 +335,15 @@ fun App() {
                 it.copy(factoryReminderStatus = Reminder.initialStatus(factoryAt, it),
                     followUpReminderStatus = Reminder.initialStatus(followAt, it))
             }
-        // "Send automatically" (Settings) queues the mail straight away; otherwise it waits (PENDING) for the Mail settings button.
+        // "Send automatically" (Settings) queues the mail when the Done screen is left; otherwise it waits (PENDING) for the Mail settings button.
         val autoSend = appSettings.autoThankYou && v.thankYouStatus == ThankYou.PENDING && SmtpSettings.load(ctx).complete
         extraNote = ""; extraSaved = ""
         scope.launch {
             val uid = UidGen.withSeq(uidPrefix, db.dao().countUidPrefix(uidPrefix))
             lastUid = uid
-            val saved = v.copy(uid = uid, thankYouStatus = if (autoSend) ThankYou.QUEUED else v.thankYouStatus)
+            val saved = v.copy(uid = uid)
             db.dao().insert(saved)
-            if (autoSend) ThankYouWorker.enqueue(ctx)
+            mailAfterDone = autoSend
             Reminders.schedule(ctx, saved)   // 24-hour reminder mails, sent in the background even if the app is closed
         }
     }
@@ -387,7 +402,7 @@ fun App() {
         scope.launch { drawerState.close() }
         if (midVisit && appSettings.confirmAbandon) confirmDiscard = true else { reset(); section = AppPage.Visit }
     }
-    fun switchUser() { section = AppPage.Visit; screen = Screen.Login; scope.launch { drawerState.close() } }
+    fun switchUser() { releaseMail(); section = AppPage.Visit; screen = Screen.Login; scope.launch { drawerState.close() } }
     fun startVisit(manual: Boolean) {
         visitStart = System.currentTimeMillis()
         if (form.country.isBlank()) form = form.copy(country = appSettings.defaultCountry.trim())

@@ -37,11 +37,13 @@ data class SmtpSettings(
                 password = p.getString(P + "password", null) ?: BuildConfig.SMTP_PASSWORD,
                 from = p.getString(P + "from", null) ?: BuildConfig.SMTP_FROM,
                 fromName = p.getString(P + "fromName", null) ?: BuildConfig.SMTP_FROM_NAME,
+                // All four blank (never entered, or saved empty by an earlier build): start from the brand's own details.
                 company = CompanyInfo(
                     address = p.getString(P + "coAddress", null) ?: "",
                     phone = p.getString(P + "coPhone", null) ?: "",
                     email = p.getString(P + "coEmail", null) ?: "",
-                    website = p.getString(P + "coWebsite", null) ?: ""))
+                    website = p.getString(P + "coWebsite", null) ?: "")
+                    .let { if (it.isEmpty) Brand.companyDefaults else it })
         }
         fun save(ctx: Context, s: SmtpSettings) {
             ctx.getSharedPreferences("settings", Context.MODE_PRIVATE).edit()
@@ -160,13 +162,14 @@ object ThankYou {
         if (info.isEmpty) return ""
         val link = "color:$AMBER_DARK;font-weight:600;text-decoration:none;"
         val web = info.website.trim()
+        // "a / b" holds several numbers or addresses: each gets its own link, one per line
+        fun links(value: String, href: (String) -> String) = value.split("/").map { it.trim() }.filter { it.isNotEmpty() }
+            .joinToString("<br>") { """<a href="${esc(href(it))}" style="$link">${esc(it)}</a>""" }
         val rows = listOf(
             "Company" to esc(company),
             "Address" to if (info.address.isBlank()) "" else escLines(info.address),
-            "Phone" to if (info.phone.isBlank()) "" else
-                """<a href="tel:${esc(info.phone.filter { it.isDigit() || it == '+' })}" style="$link">${esc(info.phone.trim())}</a>""",
-            "E-mail" to if (info.email.isBlank()) "" else
-                """<a href="mailto:${esc(info.email.trim())}" style="$link">${esc(info.email.trim())}</a>""",
+            "Phone" to links(info.phone) { n -> "tel:" + n.filter { it.isDigit() || it == '+' } },
+            "E-mail" to links(info.email) { "mailto:$it" },
             "Website" to if (web.isBlank()) "" else
                 """<a href="${esc(if (web.startsWith("http", ignoreCase = true)) web else "https://$web")}" style="$link">${esc(web)}</a>""")
         val body = rows.filter { it.second.isNotBlank() }.joinToString("") { (k, html) ->
@@ -192,6 +195,11 @@ object ThankYou {
     internal fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         .replace("\"", "&quot;").replace("'", "&#39;")
     internal fun escLines(s: String) = esc(s.trim()).replace(Regex("\r?\n"), "<br>")
+
+    /** Makes web addresses in already-escaped text clickable; not every mail client does that by itself. */
+    private fun linkify(html: String) = html.replace(Regex("https?://\\S+")) {
+        """<a href="${it.value}" style="color:$AMBER_DARK;font-weight:600;word-break:break-all;">${it.value}</a>"""
+    }
 
     /** A titled block with an amber rule under the heading. */
     internal fun section(title: String, inner: String) = """
@@ -247,7 +255,7 @@ object ThankYou {
 
         val intro = INTRO.joinToString("") { (text, headline) ->
             if (headline) """<p style="margin:16px 0 8px 0;font-weight:800;color:$AMBER_DARK;letter-spacing:0.3px;">${esc(text)}</p>"""
-            else """<p style="margin:0 0 12px 0;">${esc(text)}</p>"""
+            else """<p style="margin:0 0 12px 0;">${linkify(esc(text))}</p>"""
         }
 
         val contact = companyHtml(company, info)
@@ -349,8 +357,9 @@ object ThankYou {
     /**
      * multipart/alternative: plain text first (fallback), then the HTML version.
      * With a [logo] (PNG bytes) the HTML part becomes multipart/related so the logo travels inline, not as an attachment.
+     * [photos] are real attachments, so they wrap all of that in multipart/mixed.
      */
-    internal fun content(plain: String, html: String, logo: ByteArray?): MimeMultipart {
+    internal fun content(plain: String, html: String, logo: ByteArray?, photos: List<MailPhoto> = emptyList()): MimeMultipart {
         val alt = MimeMultipart("alternative")
         alt.addBodyPart(MimeBodyPart().apply { setText(plain, "UTF-8") })
         val htmlPart = MimeBodyPart().apply { setContent(html, "text/html; charset=UTF-8") }
@@ -366,7 +375,17 @@ object ThankYou {
             })
             alt.addBodyPart(MimeBodyPart().apply { setContent(related) })
         }
-        return alt
+        if (photos.isEmpty()) return alt
+        val mixed = MimeMultipart("mixed")
+        mixed.addBodyPart(MimeBodyPart().apply { setContent(alt) })
+        photos.forEach { p ->
+            mixed.addBodyPart(MimeBodyPart().apply {
+                dataHandler = DataHandler(ByteArrayDataSource(p.bytes, p.type))
+                disposition = MimeBodyPart.ATTACHMENT
+                fileName = p.name
+            })
+        }
+        return mixed
     }
 
     /** Company logo for the mail header, or null if it can't be read (the mail then shows the company name instead). */
@@ -382,7 +401,7 @@ object ThankYou {
             setRecipients(Message.RecipientType.TO, InternetAddress.parse(v.mailableEmails().ifEmpty { listOf(v.email.trim()) }.joinToString(","), true))
             if (isValidEmail(v.attendedByEmail)) replyTo = arrayOf(InternetAddress(v.attendedByEmail.trim(), v.attendedByName.ifBlank { null }, "UTF-8"))
             setSubject(subject(company, updated), "UTF-8")
-            setContent(content(body(v, company, updated, c.company), htmlBody(v, company, if (logo != null) LOGO_CID else null, updated, c.company), logo))
+            setContent(content(body(v, company, updated, c.company), htmlBody(v, company, if (logo != null) LOGO_CID else null, updated, c.company), logo, MailPhotos.load(v)))
         }
         Transport.send(msg)
     }

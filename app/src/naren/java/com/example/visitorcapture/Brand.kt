@@ -22,6 +22,10 @@ object Brand : BrandSpec {
         danger = Color(0xFFC0563F), dangerText = Color(0xFFFFE1D9), outline = Color(0x40FFFFFF), isDark = true)
 
     override val signature = "TEAM NAREN"
+    override val companyDefaults = CompanyInfo(
+        phone = "+91 98429 91141 / +91 99655 16076",
+        email = "export@narenonline.com / customerssupport@narenonline.com",
+        website = "https://narengroup.in")
     override val intro = listOf(
         "A BIG THANK YOU FOR CONNECTING WITH NAREN AT INDIA ITME 2026!" to true,
         "It was a pleasure welcoming you to the NAREN Group Pavilion at Greater Noida. We sincerely appreciate your valuable " +
@@ -30,7 +34,7 @@ object Brand : BrandSpec {
             "business relationship." to false,
         "DISCOVER THE WORLD OF NAREN!" to true,
         "Explore our product catalogue through the link below and discover our range of innovative textile machinery solutions." to false,
-        "Catalogue Link: To be updated shortly." to false,
+        "Catalogue Link: https://drive.google.com/drive/folders/1C3d6lmh5TtbQhDpH47kYtNHB-zKqzVu3" to false,
         "Thank you for being part of our journey!" to false,
         "LET'S CONNECT, COLLABORATE & GROW TOGETHER!" to true)
 

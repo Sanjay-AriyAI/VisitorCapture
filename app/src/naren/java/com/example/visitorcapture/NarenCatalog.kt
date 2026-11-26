@@ -12,7 +12,7 @@ internal object NarenCatalog {
     private val OHTC = arrayOf("ELGI", "SIMTA", "LUWA", "Electrojet", "Unirolls", "Mohler")
     private val HUMID = arrayOf("LUWA", "Batliboi", "Temsons", "Others")
 
-    /** Same machine list for Mechanical and Electronics spares */
+    /** Machine list shared by Mechanical and Electronics spares; each adds its own entries below */
     private val spares = listOf(
         m("Blow Room", brands(*G)),
         m("Carding", brands(*G)),
@@ -110,8 +110,15 @@ internal object NarenCatalog {
         ) else listOf(it)
     }
 
+    /** Electronics spares: same as [spares], plus Electronic Clearer (EYC) right after Winding. */
+    private val electronicsSpares = spares.flatMap {
+        if (it.name == "Winding") listOf(it, m("Electronic Clearer (EYC)", brands("Uster", "Loepfe", "Premier")))
+        else listOf(it)
+    }
+
     fun machinesFor(product: String) = when (product) {
         "Mechanical Spares" -> mechanicalSpares
+        "Electronics Spares" -> electronicsSpares
         "Retrofits" -> retrofits
         "Other Products" -> otherProducts
         else -> spares

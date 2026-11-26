@@ -24,6 +24,8 @@ interface BrandSpec {
     val signature: String
     /** Opening paragraphs of the thank-you mail; true marks a headline (bold in the HTML mail). */
     val intro: List<Pair<String, Boolean>>
+    /** "Contact us" details pre-filled on the Mail settings screen until staff enter their own. */
+    val companyDefaults: CompanyInfo get() = CompanyInfo()
 
     /** Top-level products on the "Product profile" screen, in order. */
     val products: List<String>
