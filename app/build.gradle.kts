@@ -66,6 +66,7 @@ android {
         // Naren keeps the original applicationId so installed tablets update in place and keep their visitor data.
         create("naren") { company("naren", "Naren Visitor Capture", "Naren Group") }
         create("simta") { company("simta", "SIMTA Visitor Capture", "SIMTA"); applicationIdSuffix = ".simta" }
+        create("lrt") { company("lrt", "LRT Visitor Capture", "LRT"); applicationIdSuffix = ".lrt" }
     }
     buildFeatures { compose = true; buildConfig = true; resValues = true }
     packaging {

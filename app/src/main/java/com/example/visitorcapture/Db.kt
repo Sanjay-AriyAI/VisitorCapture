@@ -124,6 +124,8 @@ interface VisitorDao {
     suspend fun scheduledReminders(): List<Visitor>
     @Query("UPDATE visitors SET factoryReminderStatus = :status WHERE uid = :uid") suspend fun setFactoryReminder(uid: String, status: String)
     @Query("UPDATE visitors SET followUpReminderStatus = :status WHERE uid = :uid") suspend fun setFollowUpReminder(uid: String, status: String)
+    @Query("UPDATE visitors SET followUpAt = :at, followUpReminderStatus = :status WHERE uid = :uid")
+    suspend fun setFollowUp(uid: String, at: Long, status: String)
     @Query("SELECT * FROM visitors WHERE uid = :uid") suspend fun byUid(uid: String): Visitor?
     @Query("SELECT * FROM visitors ORDER BY createdAt DESC") fun all(): Flow<List<Visitor>>
     @Query("SELECT COUNT(*) FROM visitors WHERE uid LIKE :prefix || '%'") suspend fun countUidPrefix(prefix: String): Int

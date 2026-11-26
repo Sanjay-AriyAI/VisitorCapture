@@ -366,7 +366,7 @@ private fun VisitorCard(v: Visitor, fmt: SimpleDateFormat, expanded: Boolean, on
                 Detail("Website", v.website)
                 Detail("Address", listOf(v.address, v.state, v.country).filter { it.isNotBlank() }.joinToString(", "))
                 Detail("Products", Catalog.summarize(v.products.split("; ").filter { it.isNotBlank() }))
-                Detail("Other products", v.otherDetail)
+                Detail(if (Brand.describeAnyProduct) "Product description" else "Other products", v.otherDetail)
                 Detail("Also interested in", v.additionalInterest)
                 val notes = Sync.notePhotos(v)
                 if (notes.isNotEmpty()) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -382,7 +382,7 @@ private fun VisitorCard(v: Visitor, fmt: SimpleDateFormat, expanded: Boolean, on
                     Detail("Follow-up", listOf(v.followUpAction, if (v.followUpAt > 0) fmt.format(Date(v.followUpAt)) else "", v.followUpNote)
                         .filter { it.isNotBlank() }.joinToString(" · "))
                 else if (v.followUpAt > 0) Detail("Follow-up", fmt.format(Date(v.followUpAt)) + reminderText(v.followUpReminderStatus))
-                Detail("Discussion notes", v.discussionNotes)
+                Detail(if (Brand.outcomeDescriptionMin > 0) "Description" else "Discussion notes", v.discussionNotes)
                 when (v.thankYouStatus) {
                     ThankYou.SENT -> Detail("Thank-you mail", "Sent " + fmt.format(Date(v.thankYouSentAt)))
                     ThankYou.QUEUED -> Detail("Thank-you mail", if (ThankYou.isUpdate(v))
@@ -461,7 +461,7 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
         val (mail, extras) = splitEmails(email, extraEmails)
         val (mainPhone, morePhones) = splitPhones(phone, extraPhones)
         val newFactory = if (Reminder.FACTORY.outcome in outcomes) factoryAt else 0L
-        val newFollow = if (Reminder.FOLLOW_UP.outcome in outcomes) followAt else 0L
+        val newFollow = if (Brand.followUpOnDone || Reminder.FOLLOW_UP.outcome in outcomes) followAt else 0L
         val edited = v.copy(name = name.trim(), title = title.trim(), company = company.trim(), email = mail, extraEmails = extras, website = website.trim(), phone = mainPhone, extraPhones = morePhones,
             address = address.trim(), state = state.trim(), country = country.trim(),
             customerType = customerType, marketExposure = market, otherDetail = other.trim(),
@@ -480,6 +480,11 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
             followUpReminderStatus = status(v.followUpAt, newFollow, v.followUpReminderStatus)))
     }
     scheduling?.let { kind ->
+        if (Brand.followUpOnDone && kind == Reminder.FOLLOW_UP)   // follow-up is its own field here, not a lead outcome
+            ScheduleDialog(kind, followAt, onSave = { at -> followAt = at; scheduling = null },
+                onRemove = if (followAt > 0) ({ followAt = 0L; scheduling = null }) else null,
+                onDismiss = { scheduling = null })
+        else {
         val ticked = kind.outcome in outcomes
         ScheduleDialog(kind, if (!ticked) 0L else if (kind == Reminder.FACTORY) factoryAt else followAt,
             onSave = { at ->
@@ -488,6 +493,7 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
             },
             onRemove = if (ticked) ({ outcomes = outcomes - kind.outcome; scheduling = null }) else null,
             onDismiss = { scheduling = null })
+        }
     }
     FormSheet("Edit visitor", onDismiss, onSave = { save() }, icon = Icons.Default.Edit) {
                 Text("ID: ${v.uid}", fontSize = 12.sp, color = Steel)
@@ -528,7 +534,7 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
                 chips(CUSTOMER_TYPES, { it == customerType }) { customerType = if (customerType == it) "" else it }
                 Text("Market exposure", fontSize = 12.sp, color = Steel)
                 chips(MARKET_EXPOSURE, { it == market }) { market = if (market == it) "" else it }
-                field("Other product detail", other, true) { other = it }
+                field(if (Brand.describeAnyProduct) "Product description" else "Other product detail", other, true) { other = it }
                 field("Also interested in", interest, true) { interest = it }
                 Text("Lead outcome", fontSize = 12.sp, color = Steel)
                 chips(LEAD_OUTCOMES, { it in outcomes }) { o ->
@@ -537,8 +543,10 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
                     else outcomes = if (o in outcomes) outcomes - o else outcomes + o
                 }
                 if (Reminder.FACTORY.outcome in outcomes) scheduleBadge(factoryAt)?.let { Text("Factory visit: $it", fontSize = 12.sp, color = Steel) }
-                if (Reminder.FOLLOW_UP.outcome in outcomes) scheduleBadge(followAt)?.let { Text("Follow-up: $it", fontSize = 12.sp, color = Steel) }
-                field("Discussion notes", notes, true) { notes = it }
+                if (Brand.followUpOnDone)
+                    LinkButton(scheduleBadge(followAt)?.let { "Follow-up: $it (change)" } ?: "+ Schedule follow-up") { scheduling = Reminder.FOLLOW_UP }
+                else if (Reminder.FOLLOW_UP.outcome in outcomes) scheduleBadge(followAt)?.let { Text("Follow-up: $it", fontSize = 12.sp, color = Steel) }
+                field(if (Brand.outcomeDescriptionMin > 0) "Description" else "Discussion notes", notes, true) { notes = it }
                 Text("Remarks", fontSize = 12.sp, color = Steel)
                 chips(REMARK_OPTIONS, { it == remark }) { remark = if (remark == it) "" else it }
                 if (remark == "Others") field("Remarks (other)", remarkOther) { remarkOther = it }

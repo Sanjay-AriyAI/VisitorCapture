@@ -1,0 +1,4 @@
+<resources>
+    <!-- LRT deep blue; keep in step with Brand.colors.bg -->
+    <color name="brand_bg">#FF0B3A75</color>
+</resources>

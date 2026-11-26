@@ -36,4 +36,21 @@ interface BrandSpec {
     fun machinesFor(product: String): List<Machine>
     /** One-line hint under the title of the catalogue screen. */
     fun catalogHint(product: String): String
+
+    // ---- Visit flow options. The defaults are the original flow (Naren, SIMTA); a company overrides only what differs. ----
+
+    /** "Customer type" tiles on the Customer profile screen, in order. */
+    val customerTypes: List<String> get() = listOf("OEM", "End User", "Agent", "Distributor")
+    /** Pre-select Market exposure from the country on the Details screen (home country = Domestic, else International). */
+    val autoMarketExposure: Boolean get() = false
+    /** Hint under the "Product profile" title. */
+    val productsHint: String get() = "Tap a product, then choose machines, makes and models. You can pick several."
+    /** True: selecting any product reveals the description box (Visitor.otherDetail), not only [otherProduct]. */
+    val describeAnyProduct: Boolean get() = false
+    /** "Purpose of visit" tiles, in order. "Factory Visit" / "Follow-up" open the date-and-time popup (see Reminder). */
+    val leadOutcomes: List<String> get() = listOf("Product Enquiry", "Sample Request", "General Enquiry", "Order", "Factory Visit", "Follow-up")
+    /** > 0: once a purpose is picked, a description of at least this many characters is required (saved as discussion notes). */
+    val outcomeDescriptionMin: Int get() = 0
+    /** True: the follow-up date and time is set on the Done screen instead of as a "Purpose of visit" tile. */
+    val followUpOnDone: Boolean get() = false
 }

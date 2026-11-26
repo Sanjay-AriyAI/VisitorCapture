@@ -58,10 +58,29 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
-val CUSTOMER_TYPES = listOf("OEM", "End User", "Agent", "Distributor")
+val CUSTOMER_TYPES get() = Brand.customerTypes
 val MARKET_EXPOSURE = listOf("Domestic Visitor", "International Visitor")
 val PRODUCTS get() = Brand.products
-val LEAD_OUTCOMES = listOf("Product Enquiry", "Sample Request", "General Enquiry", "Order", "Factory Visit", "Follow-up")
+val LEAD_OUTCOMES get() = Brand.leadOutcomes
+
+fun customerTypeIcon(t: String) = when (t) {
+    "OEM" -> Icons.Default.Factory
+    "End User", "Customer" -> Icons.Default.Person
+    "Agent" -> Icons.Default.SupportAgent
+    "Distributor" -> Icons.Default.Store
+    "Supplier" -> Icons.Default.LocalShipping
+    else -> Icons.Default.MoreHoriz
+}
+
+/** Market exposure from the visitor's country: the home country (Settings > default country, else India) is Domestic. */
+fun marketFromCountry(country: String, homeCountry: String): String? {
+    val c = country.trim().trimEnd('.').lowercase()
+    if (c.isEmpty()) return null
+    val home = homeCountry.trim().lowercase().ifEmpty { "india" }
+    val india = setOf("india", "bharat", "in", "ind")
+    val domestic = c == home || (home in india && c in india)
+    return if (domestic) "Domestic Visitor" else "International Visitor"
+}
 val REMARK_OPTIONS = listOf("Call Back", "Factory Visit", "Need Follow-up", "Others")
 const val MAX_NOTE_PHOTOS = 5   // handwritten-enquiry images per visit
 val EXTRA_EMAIL_LABELS = listOf("Secondary e-mail", "Third e-mail")   // one per extra field, MAX_EMAILS - 1 of them
@@ -172,9 +191,24 @@ fun App() {
         }
     }
 
+    // Follow-up picked on the Done screen (Brand.followUpOnDone): written to the visitor saved a moment earlier.
+    var doneFollowAt by remember { mutableLongStateOf(0L) }
+    var doneFollowEdit by remember { mutableStateOf(false) }
+    fun setDoneFollowUp(at: Long) {
+        val uid = lastUid ?: return
+        doneFollowAt = at
+        scope.launch {
+            val v = db.dao().byUid(uid) ?: return@launch
+            val updated = v.copy(followUpAt = at, followUpReminderStatus = Reminder.initialStatus(at, v))
+            db.dao().setFollowUp(uid, at, updated.followUpReminderStatus)
+            Reminders.schedule(ctx, updated)   // arms the 24-hour reminder, or disarms it when removed
+        }
+    }
+
     fun reset() {
         persistExtra()
         releaseMail()
+        doneFollowAt = 0L; doneFollowEdit = false
         lastUid = null; extraNote = ""; extraSaved = ""
         notePhotos = emptyList(); pendingNote = null; noteBusy = false; noteError = null
         form = Form(); photoFile = null; photoTaken = false; backFile = null; backTaken = false
@@ -312,7 +346,7 @@ fun App() {
         val e = employee
         // A time only counts while its tile is ticked, so a changed mind never leaves a stale reminder behind.
         val factoryAt = if (Reminder.FACTORY.outcome in form.outcomes) form.factoryVisitAt else 0L
-        val followAt = if (Reminder.FOLLOW_UP.outcome in form.outcomes) form.followUpAt else 0L
+        val followAt = if (!Brand.followUpOnDone && Reminder.FOLLOW_UP.outcome in form.outcomes) form.followUpAt else 0L
         val uidPrefix = UidGen.prefix(e?.name.orEmpty(), deviceName, at)
         val (mainEmail, extraEmails) = splitEmails(form.email, form.extraEmails)
         val (mainPhone, extraPhones) = splitPhones(form.phone, form.extraPhones)
@@ -698,7 +732,11 @@ fun App() {
                                         emailTried = true
                                         if ((listOf(form.email) + form.extraEmails).any { it.isNotBlank() && !ThankYou.isValidEmail(it) })
                                             scope.launch { snackbar.showSnackbar("Enter a valid e-mail address to continue") }
-                                        else screen = Screen.Customer
+                                        else {
+                                            if (Brand.autoMarketExposure) marketFromCountry(form.country, appSettings.defaultCountry)
+                                                ?.let { form = form.copy(marketExposure = it) }
+                                            screen = Screen.Customer
+                                        }
                                     }
                                 } })
                         }
@@ -706,15 +744,12 @@ fun App() {
                             Text("Customer profile", fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
                             Text("CUSTOMER TYPE", fontSize = 12.sp, color = Steel, letterSpacing = 1.sp)
                             Text("Tap one.", color = Steel)
-                            TileGrid(listOf(
-                                TileItem("OEM", Icons.Default.Factory, form.customerType == "OEM"),
-                                TileItem("End User", Icons.Default.Person, form.customerType == "End User"),
-                                TileItem("Agent", Icons.Default.SupportAgent, form.customerType == "Agent"),
-                                TileItem("Distributor", Icons.Default.Store, form.customerType == "Distributor"))
+                            TileGrid(CUSTOMER_TYPES.map { TileItem(it, customerTypeIcon(it), form.customerType == it) }
                             ) { form = form.copy(customerType = it) }
                             Spacer(Modifier.height(6.dp))
                             Text("MARKET EXPOSURE", fontSize = 12.sp, color = Steel, letterSpacing = 1.sp)
-                            Text("Tap one.", color = Steel)
+                            Text(if (Brand.autoMarketExposure && form.country.isNotBlank())
+                                "Picked from the country (${form.country.trim()}). Tap to change." else "Tap one.", color = Steel)
                             TileGrid(listOf(
                                 TileItem("Domestic Visitor", Icons.Default.Flag, form.marketExposure == "Domestic Visitor"),
                                 TileItem("International Visitor", Icons.Default.Public, form.marketExposure == "International Visitor"))
@@ -726,7 +761,7 @@ fun App() {
 
                         Screen.Products -> Scrolling {
                             Text("Product profile", fontSize = 28.sp, fontWeight = FontWeight.Bold, fontFamily = Display)
-                            Text("Tap a product, then choose machines, makes and models. You can pick several.", color = Steel)
+                            Text(Brand.productsHint, color = Steel)
                             TileGrid(PRODUCTS.map { p ->
                                 if (Catalog.machinesFor(p).isEmpty()) {   // nothing under it: the tile itself is the tick
                                     val on = p in form.products
@@ -741,7 +776,12 @@ fun App() {
                                 else { catalogProduct = k; screen = Screen.Catalog }
                             }
                             val other = Brand.otherProduct
-                            if (other != null && form.products.any { it == other || it.startsWith("$other > ") })
+                            if (Brand.describeAnyProduct && form.products.isNotEmpty()) {
+                                Text("DESCRIPTION", fontSize = 12.sp, color = Steel, letterSpacing = 1.sp)
+                                OutlinedTextField(form.otherDetail, { form = form.copy(otherDetail = it.take(2000)) },
+                                    placeholder = { Text("Describe the requirement: sizes, models, quantities") },
+                                    minLines = 3, maxLines = 6, modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
+                            } else if (other != null && form.products.any { it == other || it.startsWith("$other > ") })
                                 OutlinedTextField(form.otherDetail, { form = form.copy(otherDetail = it) },
                                     placeholder = { Text("Tell us more about what you're after") },
                                     modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
@@ -771,6 +811,28 @@ fun App() {
                             Text(summary.joinToString("  •  "), color = AmberText, textAlign = TextAlign.Center)
                             Text("Visit logged " + SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()).format(Date(loggedAt)) +
                                 (employee?.let { " · attended by ${it.name}" } ?: ""), color = Steel, fontSize = 13.sp, textAlign = TextAlign.Center)
+                            if (Brand.followUpOnDone) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("Follow-up", fontWeight = FontWeight.SemiBold)
+                                val badge = scheduleBadge(doneFollowAt)
+                                Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                                    .border(1.dp, if (badge != null) Amber else Steel.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                                    .clickable(enabled = lastUid != null) { doneFollowEdit = true }.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.EventRepeat, null, tint = if (badge != null) AmberText else Steel)
+                                    Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                                        Text(badge ?: "Schedule a follow-up", color = LineC, fontWeight = FontWeight.SemiBold)
+                                        Text(if (badge != null) "Reminder e-mail 24 hours before. Tap to change." else "Optional. Pick a date and time.",
+                                            color = Steel, fontSize = 13.sp)
+                                    }
+                                    if (badge != null) IconButton({ setDoneFollowUp(0L) }) {
+                                        Icon(Icons.Default.Close, "Remove follow-up", tint = Steel)
+                                    }
+                                }
+                            }
+                            if (doneFollowEdit) ScheduleDialog(Reminder.FOLLOW_UP, doneFollowAt,
+                                onSave = { at -> setDoneFollowUp(at); doneFollowEdit = false },
+                                onRemove = if (doneFollowAt > 0) ({ setDoneFollowUp(0L); doneFollowEdit = false }) else null,
+                                onDismiss = { doneFollowEdit = false })
                             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text("Anything else you're interested in?", fontWeight = FontWeight.SemiBold)
                                 OutlinedTextField(extraNote, { extraNote = it.take(1000) },

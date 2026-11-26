@@ -45,7 +45,8 @@ fun LeadOutcomeScreen(form: Form, onChange: (Form) -> Unit, staff: EmployeeInfo?
             "Sample Request" -> Icons.Default.Science
             "General Enquiry" -> Icons.Default.Info
             "Order" -> Icons.Default.ShoppingCart
-            "Factory Visit" -> Icons.Default.Factory
+            "Factory Visit", "Request for Visit" -> Icons.Default.Factory
+            "Complaint" -> Icons.Default.ReportProblem
             else -> Icons.Default.EventRepeat
         }, o in form.outcomes, badge = if (kind != null && o in form.outcomes) scheduleBadge(timeOf(kind)) else null)
     }) { k ->
@@ -67,14 +68,32 @@ fun LeadOutcomeScreen(form: Form, onChange: (Form) -> Unit, staff: EmployeeInfo?
     if (askExact) ExactAlarmDialog { askExact = false }
 
     Spacer(Modifier.height(6.dp))
-    Text("DISCUSSION NOTES", fontSize = 12.sp, color = Steel, letterSpacing = 1.sp)
-    OutlinedTextField(form.notes, { onChange(form.copy(notes = it.take(2000))) },
-        placeholder = { Text("What was discussed: parts, quantities, prices, next steps") },
-        minLines = 3, maxLines = 8, modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
+    val min = Brand.outcomeDescriptionMin
+    val described = form.notes.trim().length >= min
+    if (min > 0) {
+        // Required description: shown once a purpose is picked, saved as the discussion notes.
+        if (form.outcomes.isNotEmpty()) {
+            Text("DESCRIPTION *", fontSize = 12.sp, color = Steel, letterSpacing = 1.sp)
+            OutlinedTextField(form.notes, { onChange(form.copy(notes = it.take(2000))) },
+                placeholder = { Text("Describe the visit: what is needed, issue details, next steps") },
+                isError = form.notes.isNotEmpty() && !described,
+                supportingText = {
+                    val n = form.notes.trim().length
+                    Text(if (described) "$n characters" else "At least $min characters ($n so far)",
+                        color = if (form.notes.isNotEmpty() && !described) Color_F0C3B8 else Steel)
+                },
+                minLines = 3, maxLines = 8, modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
+        }
+    } else {
+        Text("DISCUSSION NOTES", fontSize = 12.sp, color = Steel, letterSpacing = 1.sp)
+        OutlinedTextField(form.notes, { onChange(form.copy(notes = it.take(2000))) },
+            placeholder = { Text("What was discussed: parts, quantities, prices, next steps") },
+            minLines = 3, maxLines = 8, modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
+    }
 
     NavRow(
         { SecondaryButton("Back") { onBack() } },
-        { PrimaryButton("Finish", enabled = form.outcomes.isNotEmpty()) { onFinish() } })
+        { PrimaryButton("Finish", enabled = form.outcomes.isNotEmpty() && described) { onFinish() } })
 }
 
 /**

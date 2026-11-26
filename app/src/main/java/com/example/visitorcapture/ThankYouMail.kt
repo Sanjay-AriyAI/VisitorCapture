@@ -239,7 +239,8 @@ object ThankYou {
               ${if (machines.isEmpty()) "" else """<ul style="margin:8px 0 0 0;padding:0 0 0 18px;font-size:14px;line-height:1.45;">$machines</ul>"""}
               $extra
             </div>"""
-        }
+        } + if (Brand.describeAnyProduct && paths.isNotEmpty() && v.otherDetail.isNotBlank())
+            """<div style="font-family:$FONT;color:$MUTED;font-size:14px;margin:10px 0 0 0;">${escLines(v.otherDetail)}</div>""" else ""
     }
 
     /**
