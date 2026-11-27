@@ -57,4 +57,12 @@ object Brand : BrandSpec {
     override val leadOutcomes = listOf("Sample Request", "Complaint", "Request for Visit", "General Enquiry")
     override val outcomeDescriptionMin = 10
     override val followUpOnDone = true
+    override val mailShowsNextStep = false
+    override val mailShowsProfile = false
+    override val mailShowsVisitDescription = true
+    /** LRT blue band and headings, with the logo red as the accent line, borders and badges. */
+    override val mailColors = MailColors(
+        band = "#0B3A75", bandSubtle = "#C9D8EE", bandFaint = "#9FB6D6", text = "#0B2A55",
+        accent = "#E53935", onAccent = "#FFFFFF", accentDark = "#0D5DB8",
+        tint = "#EEF4FC", tintBorder = "#B9D0EE", chipText = "#0B3A75")
 }

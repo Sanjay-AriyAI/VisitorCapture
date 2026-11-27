@@ -40,6 +40,12 @@ object Brand : BrandSpec {
 
     override val products = listOf("Mechanical Spares", "Electronics Spares", "Retrofits", "Other Products")
     override val otherProduct = "Other Products"
+    override val mailShowsProfile = false
+    /** Naren teal band with the amber accent, like the app. */
+    override val mailColors = MailColors(
+        band = "#0E7C74", bandSubtle = "#D2F1EE", bandFaint = "#A9DCD7", text = "#0A3A36",
+        accent = "#E8A33D", onAccent = "#0B2033", accentDark = "#A35F00",
+        tint = "#FFF8EC", tintBorder = "#F3D19C", chipText = "#7A4600")
     override fun productIcon(product: String) = when (product) {
         "Mechanical Spares" -> Icons.Default.Build
         "Electronics Spares" -> Icons.Default.Memory

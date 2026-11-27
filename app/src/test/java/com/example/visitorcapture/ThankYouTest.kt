@@ -50,11 +50,14 @@ class ThankYouTest {
 
     @Test fun htmlBodyCarriesTheVisitAndOurCompanyDetails() {
         val h = ThankYou.htmlBody(fullVisitor(), "Naren Group", ThankYou.LOGO_CID, info = naren)
-        listOf("Anil Kumar", Brand.intro.first().first, Brand.signature, "OEM", "Domestic Visitor",
+        listOf("Anil Kumar", Brand.intro.first().first, Brand.signature,
             "Mechanical Spares", "Carding", "Retrofits", "Blow Room", "Control panel PLC conversion",
-            "Spindle tapes, 200 nos", "Product Enquiry", "Sample Request", "quotation", "Priya Rao", "Sales Manager",
+            "Spindle tapes, 200 nos", "Product Enquiry", "Sample Request", "Priya Rao", "Sales Manager",
             "Contact us", "1, Mill Road<br>Coimbatore 641014", "tel:+914220000000", "mailto:sales@naren.example",
             "https://www.naren.example", "cid:${ThankYou.LOGO_CID}").forEach { assertTrue("missing: $it", h.contains(it)) }
+        // "Your profile" (customer type, market) is shown only for companies that keep it in the mail
+        listOf("Your profile", "OEM", "Domestic Visitor").forEach { assertEquals("profile: $it", Brand.mailShowsProfile, h.contains(it)) }
+        listOf("Next step", "quotation").forEach { assertEquals("next step: $it", Brand.mailShowsNextStep, h.contains(it)) }
     }
 
     @Test fun htmlBodyDoesNotEchoTheVisitorsOwnContactDetails() {
@@ -66,7 +69,9 @@ class ThankYouTest {
 
     @Test fun htmlBodyNeverLeaksInternalStaffNotes() {
         val h = ThankYou.htmlBody(fullVisitor(), "Naren Group")
-        assertFalse(h.contains("INTERNAL"))
+        assertFalse(h.contains("INTERNAL remark"))          // remarks are always staff-only
+        // the purpose-of-visit description goes to the visitor only where the company sends it (LRT)
+        assertEquals(Brand.mailShowsVisitDescription, h.contains("offered 12% discount"))
         assertFalse(h.contains("cid:"))                     // no logo given: company name as text
     }
 
@@ -97,7 +102,7 @@ class ThankYouTest {
     private fun mailed() = fullVisitor().copy(thankYouStatus = ThankYou.SENT, thankYouSentAt = 1_790_100_000_000L)
 
     @Test fun editingVisitorDetailsAfterTheMailWentOutSendsAnUpdate() {
-        assertTrue(ThankYou.needsUpdateMail(mailed(), mailed().copy(customerType = "Dealer")))
+        assertEquals(Brand.mailShowsProfile, ThankYou.needsUpdateMail(mailed(), mailed().copy(customerType = "Dealer")))
         assertFalse(ThankYou.needsUpdateMail(mailed(), mailed().copy(phone = "+91 11111 22222")))   // not shown in the mail
         assertTrue(ThankYou.needsUpdateMail(mailed(), mailed().copy(products = "Retrofits > Blow Room")))
         assertTrue(ThankYou.needsUpdateMail(mailed(), mailed().copy(leadOutcomes = "Order")))
@@ -105,7 +110,8 @@ class ThankYouTest {
 
     @Test fun noUpdateMailForInternalEditsOrUnsentRecords() {
         assertFalse(ThankYou.needsUpdateMail(mailed(), mailed()))
-        assertFalse(ThankYou.needsUpdateMail(mailed(), mailed().copy(discussionNotes = "changed", remarks = "Call Back")))
+        assertFalse(ThankYou.needsUpdateMail(mailed(), mailed().copy(remarks = "Call Back")))
+        assertEquals(Brand.mailShowsVisitDescription, ThankYou.needsUpdateMail(mailed(), mailed().copy(discussionNotes = "changed")))
         assertFalse(ThankYou.needsUpdateMail(mailed().copy(thankYouStatus = ThankYou.PENDING), mailed().copy(phone = "1")))
         assertFalse(ThankYou.needsUpdateMail(mailed(), mailed().copy(email = "not-an-address")))
     }
@@ -130,6 +136,6 @@ class ThankYouTest {
 
     @Test fun followUpIsMentionedWhenPlanned() {
         val b = ThankYou.body(visitor().copy(followUpAction = "Schedule Factory Visit", followUpAt = 1_800_000_000_000L), "Naren Group")
-        assertTrue(b.contains("factory"))
+        assertEquals(Brand.mailShowsNextStep, b.contains("factory"))   // part of the "Next step" line
     }
 }

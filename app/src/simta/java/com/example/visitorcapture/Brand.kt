@@ -40,6 +40,11 @@ object Brand : BrandSpec {
 
     override val products = listOf("Spindle Tape", "Clearer Roller", "OHTC", "Autopacker", "BTS", "CTS", "Others")
     override val otherProduct = "Others"
+    /** SIMTA navy band with the logo blue accent, like the app. */
+    override val mailColors = MailColors(
+        band = "#0E2A47", bandSubtle = "#C9D8EA", bandFaint = "#9FB4CC", text = "#0E2A47",
+        accent = "#01A0E2", onAccent = "#04172A", accentDark = "#0072A8",
+        tint = "#E8F7FD", tintBorder = "#A8DDF4", chipText = "#005A85")
     override fun productIcon(product: String) = when (product) {
         "Spindle Tape" -> Icons.Default.LinearScale
         "Clearer Roller" -> Icons.Default.Cached

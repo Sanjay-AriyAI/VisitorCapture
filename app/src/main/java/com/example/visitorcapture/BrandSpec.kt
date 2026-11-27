@@ -53,4 +53,31 @@ interface BrandSpec {
     val outcomeDescriptionMin: Int get() = 0
     /** True: the follow-up date and time is set on the Done screen instead of as a "Purpose of visit" tile. */
     val followUpOnDone: Boolean get() = false
+
+    // ---- Thank-you mail sections ----
+    /** Show the "Next step" box (e.g. "We will get back to you shortly regarding your sample request."). */
+    val mailShowsNextStep: Boolean get() = true
+    /** Show the "Your profile" section (customer type and market). */
+    val mailShowsProfile: Boolean get() = true
+    /** Show the "Purpose of visit" description (discussion notes) to the visitor. Off = it stays an internal staff note. */
+    val mailShowsVisitDescription: Boolean get() = false
+    /** Colours of the thank-you and reminder mails. */
+    val mailColors: MailColors get() = MailColors()
 }
+
+/**
+ * Hex colours for the HTML mails (inline CSS, so plain "#RRGGBB" strings). Defaults are the original navy-and-amber mail.
+ * Keep text colours dark and the band dark enough for white text: mails are always shown on a light page.
+ */
+data class MailColors(
+    val band: String = "#0B2033",          // header band under the logo and the footer, white text on it
+    val bandSubtle: String = "#C9D4DF",    // secondary text on the band
+    val bandFaint: String = "#9FB0C1",     // footer text on the band
+    val text: String = "#0B2033",          // body text and headings
+    val accent: String = "#E8A33D",        // rule under the logo, left borders, badges
+    val onAccent: String = "#0B2033",      // text on an accent badge
+    val accentDark: String = "#A35F00",    // section titles, links (readable on white)
+    val tint: String = "#FFF8EC",          // "Next step" / "updated" boxes, chips
+    val tintBorder: String = "#F3D19C",
+    val chipText: String = "#7A4600",
+)

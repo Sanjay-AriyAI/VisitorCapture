@@ -10,6 +10,12 @@ import javax.mail.internet.InternetAddress
 import javax.mail.internet.MimeMessage
 import com.example.visitorcapture.ThankYou.AMBER
 import com.example.visitorcapture.ThankYou.AMBER_DARK
+import com.example.visitorcapture.ThankYou.BAND
+import com.example.visitorcapture.ThankYou.BAND_FAINT
+import com.example.visitorcapture.ThankYou.BAND_SUBTLE
+import com.example.visitorcapture.ThankYou.ON_AMBER
+import com.example.visitorcapture.ThankYou.TINT
+import com.example.visitorcapture.ThankYou.TINT_BORDER
 import com.example.visitorcapture.ThankYou.FONT
 import com.example.visitorcapture.ThankYou.MUTED
 import com.example.visitorcapture.ThankYou.NAVY
@@ -94,6 +100,7 @@ object ReminderMail {
         sb.append("Your enquiry\n")
         val p = purposes(v)
         if (p.isNotEmpty()) sb.append("Purpose of visit: ").append(p.joinToString(", ")).append('\n')
+        if (Brand.mailShowsVisitDescription && v.discussionNotes.isNotBlank()) sb.append("Description: ").append(v.discussionNotes.trim()).append('\n')
         val interests = Catalog.summarize(v.products.split("; ").filter { it.isNotBlank() })
         interests.lines().filter { it.isNotBlank() }.forEach { sb.append("  - ").append(it.trim()).append('\n') }
         if (Brand.otherProduct?.let { v.products.contains(it) } == true && v.otherDetail.isNotBlank()) sb.append("  - Other: ").append(v.otherDetail.trim()).append('\n')
@@ -128,6 +135,7 @@ object ReminderMail {
         val p = purposes(v)
         val enquiry = buildString {
             if (p.isNotEmpty()) append("<div>${ThankYou.chips(p)}</div>")
+            append(ThankYou.visitDescriptionHtml(v))
             append(products)
             if (additional.isNotEmpty()) append("""<div style="font-family:$FONT;margin:14px 0 0 0;font-size:13px;color:$MUTED;">Also interested in</div>
                 <div style="font-family:$FONT;font-size:14px;color:$NAVY;font-weight:600;padding-top:2px;line-height:1.5;">${escLines(additional)}</div>""")
@@ -145,10 +153,10 @@ object ReminderMail {
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid $RULE;">
   <tr><td style="padding:24px 32px 20px 32px;background:#FFFFFF;">$header</td></tr>
   <tr><td style="height:4px;line-height:4px;font-size:0;background:$AMBER;">&nbsp;</td></tr>
-  <tr><td style="padding:28px 32px 0 32px;background:$NAVY;">
-    <div style="font-family:$FONT;display:inline-block;background:$AMBER;color:$NAVY;font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;border-radius:4px;padding:4px 10px;margin-bottom:10px;">Reminder</div>
+  <tr><td style="padding:28px 32px 0 32px;background:$BAND;">
+    <div style="font-family:$FONT;display:inline-block;background:$AMBER;color:$ON_AMBER;font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;border-radius:4px;padding:4px 10px;margin-bottom:10px;">Reminder</div>
     <div style="font-family:$FONT;font-size:24px;line-height:1.3;font-weight:700;color:#FFFFFF;">Upcoming ${esc(kind.label.lowercase())}</div>
-    <div style="font-family:$FONT;font-size:14px;color:#C9D4DF;padding:6px 0 26px 0;">${esc(whenFmt().format(Date(at)))}</div>
+    <div style="font-family:$FONT;font-size:14px;color:$BAND_SUBTLE;padding:6px 0 26px 0;">${esc(whenFmt().format(Date(at)))}</div>
   </td></tr>
   <tr><td style="padding:26px 32px 0 32px;font-family:$FONT;font-size:15px;line-height:1.6;color:$NAVY;">
     <p style="margin:0 0 12px 0;">${if (name.isNotEmpty()) "Dear ${esc(name)}," else "Dear Sir/Madam,"}</p>
@@ -166,7 +174,7 @@ object ReminderMail {
     <div style="font-size:16px;font-weight:700;padding-top:4px;">${esc(v.attendedByName.trim().ifBlank { company })}</div>
     <div style="color:$MUTED;font-size:13px;">$sig</div>
   </td></tr>
-  <tr><td style="padding:16px 32px;background:$NAVY;font-family:$FONT;font-size:11px;line-height:1.6;color:#9FB0C1;text-align:center;">
+  <tr><td style="padding:16px 32px;background:$BAND;font-family:$FONT;font-size:11px;line-height:1.6;color:$BAND_FAINT;text-align:center;">
     You received this reminder because you scheduled a ${esc(kind.label.lowercase())} with ${esc(company)}.<br>
     © $year ${esc(company)}. All rights reserved.
   </td></tr>

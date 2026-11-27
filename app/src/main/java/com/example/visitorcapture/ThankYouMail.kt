@@ -134,7 +134,7 @@ object ThankYou {
             sb.append('\n')
         }
 
-        val next = nextStep(v)
+        val next = if (Brand.mailShowsNextStep) nextStep(v) else ""
         if (next.isNotEmpty()) sb.append(next).append("\n\n")
 
         sb.append("If you have any questions in the meantime, just reply to this e-mail")
@@ -183,10 +183,17 @@ object ThankYou {
 
     // ------------------------------------------------------------------ HTML mail
 
-    // Brand colours, matching the app theme. Mail clients ignore <style> blocks and CSS variables, so everything is inline.
-    internal const val NAVY = "#0B2033"
-    internal const val AMBER = "#E8A33D"
-    internal const val AMBER_DARK = "#A35F00"
+    // Brand colours, per company (Brand.mailColors). Mail clients ignore <style> blocks and CSS variables, so everything is inline.
+    internal val NAVY get() = Brand.mailColors.text
+    internal val BAND get() = Brand.mailColors.band
+    internal val BAND_SUBTLE get() = Brand.mailColors.bandSubtle
+    internal val BAND_FAINT get() = Brand.mailColors.bandFaint
+    internal val AMBER get() = Brand.mailColors.accent
+    internal val ON_AMBER get() = Brand.mailColors.onAccent
+    internal val AMBER_DARK get() = Brand.mailColors.accentDark
+    internal val TINT get() = Brand.mailColors.tint
+    internal val TINT_BORDER get() = Brand.mailColors.tintBorder
+    internal val CHIP_TEXT get() = Brand.mailColors.chipText
     internal const val MUTED = "#5B6B7B"
     internal const val PAGE = "#F3F5F8"
     internal const val RULE = "#E6EBF1"
@@ -220,7 +227,7 @@ object ThankYou {
     }
 
     internal fun chips(items: List<String>) = items.joinToString("") {
-        """<span style="display:inline-block;font-family:$FONT;background:#FFF3E0;color:#7A4600;border:1px solid #F3D19C;border-radius:14px;padding:5px 12px;margin:10px 6px 0 0;font-size:13px;font-weight:600;">${esc(it)}</span>"""
+        """<span style="display:inline-block;font-family:$FONT;background:$TINT;color:$CHIP_TEXT;border:1px solid $TINT_BORDER;border-radius:14px;padding:5px 12px;margin:10px 6px 0 0;font-size:13px;font-weight:600;">${esc(it)}</span>"""
     }
 
     /** Products grouped as Product → machine → makes / models, from the stored "A > B > C" catalogue paths. */
@@ -239,9 +246,16 @@ object ThankYou {
               ${if (machines.isEmpty()) "" else """<ul style="margin:8px 0 0 0;padding:0 0 0 18px;font-size:14px;line-height:1.45;">$machines</ul>"""}
               $extra
             </div>"""
-        } + if (Brand.describeAnyProduct && paths.isNotEmpty() && v.otherDetail.isNotBlank())
-            """<div style="font-family:$FONT;color:$MUTED;font-size:14px;margin:10px 0 0 0;">${escLines(v.otherDetail)}</div>""" else ""
+        } + if (Brand.describeAnyProduct && paths.isNotEmpty() && v.otherDetail.isNotBlank()) labelled("Description", v.otherDetail) else ""
     }
+
+    /** The description typed under "Purpose of visit" (Visitor.discussionNotes), for companies that send it; "" otherwise. */
+    internal fun visitDescriptionHtml(v: Visitor) =
+        if (Brand.mailShowsVisitDescription && v.discussionNotes.isNotBlank()) labelled("Description", v.discussionNotes) else ""
+
+    private fun labelled(label: String, text: String) =
+        """<div style="font-family:$FONT;margin:14px 0 0 0;font-size:13px;color:$MUTED;">${esc(label)}</div>
+           <div style="font-family:$FONT;font-size:14px;color:$NAVY;padding-top:2px;line-height:1.5;">${escLines(text.trim())}</div>"""
 
     /**
      * Branded HTML body: greeting, the details captured from the card, profile, products of interest,
@@ -260,14 +274,14 @@ object ThankYou {
         }
 
         val contact = companyHtml(company, info)
-        val profile = details(listOf("Customer type" to v.customerType, "Market" to v.marketExposure))
+        val profile = if (!Brand.mailShowsProfile) "" else details(listOf("Customer type" to v.customerType, "Market" to v.marketExposure))
         val products = productsHtml(v)
         val additional = v.additionalInterest.trim()
         val purposes = v.leadOutcomes.split("; ").map { it.trim() }.filter { it.isNotBlank() }
         val visit = details(listOf(
             "Date & time" to if (v.createdAt > 0) visitFmt.format(Date(v.createdAt)) else "",
             "Attended by" to listOf(v.attendedByName.trim(), v.attendedByTitle.trim()).filter { it.isNotBlank() }.joinToString(", ")))
-        val next = nextStep(v)
+        val next = if (Brand.mailShowsNextStep) nextStep(v) else ""
 
         val header = if (logoCid != null)
             """<img src="cid:$logoCid" alt="${esc(company)}" width="180" style="display:block;border:0;outline:none;width:180px;max-width:60%;height:auto;">"""
@@ -286,16 +300,16 @@ object ThankYou {
 <table role="presentation" width="760" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:760px;background:#FFFFFF;border-radius:12px;overflow:hidden;border:1px solid $RULE;">
   <tr><td style="padding:24px 32px 20px 32px;background:#FFFFFF;">$header</td></tr>
   <tr><td style="height:4px;line-height:4px;font-size:0;background:$AMBER;">&nbsp;</td></tr>
-  <tr><td style="padding:28px 32px 0 32px;background:$NAVY;">
-    ${if (updated) """<div style="font-family:$FONT;display:inline-block;background:$AMBER;color:$NAVY;font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;border-radius:4px;padding:4px 10px;margin-bottom:10px;">Updated &middot; Final version</div>""" else ""}
+  <tr><td style="padding:28px 32px 0 32px;background:$BAND;">
+    ${if (updated) """<div style="font-family:$FONT;display:inline-block;background:$AMBER;color:$ON_AMBER;font-size:11px;font-weight:800;letter-spacing:1.4px;text-transform:uppercase;border-radius:4px;padding:4px 10px;margin-bottom:10px;">Updated &middot; Final version</div>""" else ""}
     <div style="font-family:$FONT;font-size:24px;line-height:1.3;font-weight:700;color:#FFFFFF;">${
         if (updated) "Your visit details have been updated" else "Thank you for your visit" + (if (name.isNotEmpty()) ", " + esc(name) else "") + "!"}</div>
-    <div style="font-family:$FONT;font-size:14px;color:#C9D4DF;padding:6px 0 26px 0;">${
-        if (updated) "This e-mail replaces our earlier message." else "We're glad you stopped by our stand."}</div>
+    <div style="font-family:$FONT;font-size:14px;color:$BAND_SUBTLE;padding:6px 0 26px 0;">${
+        if (updated) "This e-mail replaces our earlier message." else "We're glad you stopped by our stall."}</div>
   </td></tr>
   <tr><td style="padding:26px 32px 0 32px;font-family:$FONT;font-size:15px;line-height:1.6;color:$NAVY;">
     <p style="margin:0 0 12px 0;">${if (name.isNotEmpty()) "Dear ${esc(name)}," else "Dear Sir/Madam,"}</p>
-    ${if (updated) """<p style="margin:0 0 12px 0;padding:12px 14px;background:#FFF8EC;border-left:4px solid $AMBER;border-radius:4px;">
+    ${if (updated) """<p style="margin:0 0 12px 0;padding:12px 14px;background:$TINT;border-left:4px solid $AMBER;border-radius:4px;">
       We have reviewed and updated the details recorded during your visit. <b>Please treat this e-mail as the final version</b>
       and disregard the summary we sent earlier.</p>""" else ""}
     $intro
@@ -304,7 +318,7 @@ object ThankYou {
         if (next.isNotEmpty()) sb.append("""
   <tr><td style="padding:20px 32px 0 32px;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-      <td style="font-family:$FONT;background:#FFF8EC;border:1px solid #F3D19C;border-radius:8px;padding:14px 16px;">
+      <td style="font-family:$FONT;background:$TINT;border:1px solid $TINT_BORDER;border-radius:8px;padding:14px 16px;">
         <div style="font-size:11px;letter-spacing:1.6px;font-weight:700;color:$AMBER_DARK;text-transform:uppercase;">Next step</div>
         <div style="font-size:15px;color:$NAVY;font-weight:600;padding-top:4px;line-height:1.5;">${esc(next)}</div>
       </td></tr></table>
@@ -314,7 +328,7 @@ object ThankYou {
             products + (if (additional.isEmpty()) "" else
                 """<div style="font-family:$FONT;margin:14px 0 0 0;font-size:13px;color:$MUTED;">Also interested in</div>
                    <div style="font-family:$FONT;font-size:14px;color:$NAVY;font-weight:600;padding-top:2px;line-height:1.5;">${escLines(additional)}</div>""")))
-        if (purposes.isNotEmpty()) sb.append(section("Purpose of visit", "<div>${chips(purposes)}</div>"))
+        if (purposes.isNotEmpty()) sb.append(section("Purpose of visit", "<div>${chips(purposes)}</div>" + visitDescriptionHtml(v)))
         if (visit.isNotEmpty()) sb.append(section("Your visit", visit))
         if (contact.isNotEmpty()) sb.append(section("Contact us", contact))
         sb.append("""
@@ -326,7 +340,7 @@ object ThankYou {
     <div style="color:$MUTED;">Warm regards,</div>
     <div style="font-size:16px;font-weight:700;padding-top:4px;">$SIGNATURE</div>
   </td></tr>
-  <tr><td style="padding:16px 32px;background:$NAVY;font-family:$FONT;font-size:11px;line-height:1.6;color:#9FB0C1;text-align:center;">
+  <tr><td style="padding:16px 32px;background:$BAND;font-family:$FONT;font-size:11px;line-height:1.6;color:$BAND_FAINT;text-align:center;">
     You received this e-mail because you shared your business card with ${esc(company)}.<br>
     © $year ${esc(company)}. All rights reserved.
   </td></tr>

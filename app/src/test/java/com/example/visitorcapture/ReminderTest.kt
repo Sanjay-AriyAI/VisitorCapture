@@ -61,7 +61,8 @@ class ReminderTest {
             for (b in listOf(plain, html)) {
                 listOf("Anil Kumar", "Carding", "Control panel PLC conversion", "Spindle tapes, 200 nos", "Product Enquiry", "Priya Rao")
                     .forEach { assertTrue("$kind missing: $it", b.contains(it)) }
-                assertFalse(b.contains("INTERNAL"))
+                assertFalse(b.contains("INTERNAL remark"))
+                assertEquals(Brand.mailShowsVisitDescription, b.contains("offered 12% discount"))   // shown only where the company sends it
             }
             assertTrue(html.contains("cid:${ThankYou.LOGO_CID}"))
         }
