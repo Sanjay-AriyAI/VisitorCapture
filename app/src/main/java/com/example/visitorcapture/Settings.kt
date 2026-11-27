@@ -248,17 +248,21 @@ fun MailSettingsScreen(visitors: List<Visitor>, onBack: () -> Unit, onSaved: (me
     var user by remember { mutableStateOf(initial.user) }
     var password by remember { mutableStateOf(initial.password) }
     var showPassword by remember { mutableStateOf(false) }
-    var from by remember { mutableStateOf(initial.from) }
     var fromName by remember { mutableStateOf(initial.fromName) }
     var coAddress by remember { mutableStateOf(initial.company.address) }
     var coPhone by remember { mutableStateOf(initial.company.phone) }
     var coEmail by remember { mutableStateOf(initial.company.email) }
     var coWebsite by remember { mutableStateOf(initial.company.website) }
+    val ccEdit = remember { AddressListState(initial.cc) }
+    val bccEdit = remember { AddressListState(initial.bcc) }
+    val copiesBad = ccEdit.bad.isNotEmpty() || bccEdit.bad.isNotEmpty()
     var status by remember { mutableStateOf<Pair<String, Boolean>?>(null) }   // message, isError
     var busy by remember { mutableStateOf(false) }
     var configured by remember { mutableStateOf(initial.complete) }
-    fun current() = SmtpSettings(host.trim(), port.trim().toIntOrNull() ?: 587, user.trim(), password, from.trim(), fromName.trim(),
-        CompanyInfo(coAddress.trim(), coPhone.trim(), coEmail.trim(), coWebsite.trim()))
+    // Mails are always sent from the username, so there is no separate "Send from" (stored blank = use the username).
+    fun current() = SmtpSettings(host.trim(), port.trim().toIntOrNull() ?: 587, user.trim(), password, "", fromName.trim(),
+        CompanyInfo(coAddress.trim(), coPhone.trim(), coEmail.trim(), coWebsite.trim()),
+        cc = ccEdit.result, bcc = bccEdit.result)
 
     val unsent = visitors.count { it.thankYouStatus == ThankYou.PENDING }
     val queued = visitors.count { it.thankYouStatus == ThankYou.QUEUED }
@@ -303,7 +307,7 @@ fun MailSettingsScreen(visitors: List<Visitor>, onBack: () -> Unit, onSaved: (me
                     "(Google account › Security › 2-Step Verification › App passwords).", fontSize = 12.sp, color = Steel)
                 MailField("SMTP server", host, Icons.Default.Dns) { host = it }
                 MailField("Port (587 or 465)", port, Icons.Default.Numbers) { port = it.filter(Char::isDigit).take(5) }
-                MailField("Username / e-mail", user, Icons.Default.AlternateEmail) { user = it }
+                MailField("E-mail (mails are sent from this address)", user, Icons.Default.AlternateEmail) { user = it }
                 OutlinedTextField(password, { password = it }, label = { Text("Password / app password") }, singleLine = true,
                     leadingIcon = { Icon(Icons.Default.Key, null) },
                     trailingIcon = {
@@ -314,7 +318,6 @@ fun MailSettingsScreen(visitors: List<Visitor>, onBack: () -> Unit, onSaved: (me
                     },
                     visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                     modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
-                MailField("Send from (blank = username)", from, Icons.Default.Outbox) { from = it }
                 MailField("Company name in the e-mail", fromName, Icons.Default.Business) { fromName = it }
             }
         }
@@ -330,6 +333,17 @@ fun MailSettingsScreen(visitors: List<Visitor>, onBack: () -> Unit, onSaved: (me
                 MailField("Website", coWebsite, Icons.Default.Language) { coWebsite = it }
             }
         }
+
+        SectionHeader("Copies on every mail")
+        SettingsGroup {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("The visitor is always in \"To\" and the mail is sent from the account above. " +
+                    "These addresses get a copy of every thank-you and reminder mail. Leave empty for none.", fontSize = 12.sp, color = Steel)
+                AddressListEditor("CC", "Visible to the visitor", ccEdit)
+                HorizontalDivider(color = LineC.copy(alpha = 0.07f))
+                AddressListEditor("BCC", "Hidden: the visitor and CC don't see these", bccEdit)
+            }
+        }
         status?.let { (msg, err) ->
             Text(msg, fontSize = 13.sp, color = if (err) Color_F0C3B8 else AmberText, modifier = Modifier.padding(start = 4.dp, top = 10.dp))
         }
@@ -337,17 +351,16 @@ fun MailSettingsScreen(visitors: List<Visitor>, onBack: () -> Unit, onSaved: (me
             verticalAlignment = Alignment.CenterVertically) {
             SecondaryButton("Save", Modifier.weight(1f)) {
                 if (busy) return@SecondaryButton
+                if (copiesBad) { status = "Fix or clear the CC / BCC address first." to true; return@SecondaryButton }
                 val c = current(); SmtpSettings.save(ctx, c); configured = c.complete; Reminders.runNow(ctx)
                 // saved: close Mail settings and go home; the message is shown there
                 onSaved(if (c.complete) "Mail settings saved" else "Saved. Server, username and password are all needed to send mails.", false)
             }
             PrimaryButton(if (busy) "Sending…" else "Save & test", enabled = !busy && current().complete, modifier = Modifier.weight(1f)) {
                 val c = current()
-                if (!ThankYou.isValidEmail(c.user) && !ThankYou.isValidEmail(c.from)) {
-                    status = "Enter a full e-mail address (name@company.com) as the username." to true; return@PrimaryButton
-                }
-                if (c.from.isNotBlank() && !ThankYou.isValidEmail(c.from)) {
-                    status = "\"Send from\" must be a full e-mail address like name@company.com, or left blank." to true; return@PrimaryButton
+                if (copiesBad) { status = "Fix or clear the CC / BCC address first." to true; return@PrimaryButton }
+                if (!ThankYou.isValidEmail(c.user)) {
+                    status = "Enter a full e-mail address (name@company.com) as the e-mail." to true; return@PrimaryButton
                 }
                 busy = true; status = "Sending test mail…" to false
                 scope.launch {
@@ -366,3 +379,45 @@ fun MailSettingsScreen(visitors: List<Visitor>, onBack: () -> Unit, onSaved: (me
 private fun MailField(label: String, value: String, icon: ImageVector, onChange: (String) -> Unit) =
     OutlinedTextField(value, onChange, label = { Text(label) }, singleLine = true,
         leadingIcon = { Icon(icon, null) }, modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
+
+/** The saved addresses of one copy list (CC or BCC) plus what is being typed into its "Add" box. */
+class AddressListState(initial: List<String>) {
+    var list by mutableStateOf(initial)
+    var input by mutableStateOf("")
+    val typed get() = SmtpSettings.parseCc(input)
+    val bad get() = typed.filterNot { ThankYou.isValidEmail(it) }
+    /** What gets saved: an address typed but not yet added with "+" counts too, as long as it is valid. */
+    val result get() = (list + typed.filter { ThankYou.isValidEmail(it) }).distinctBy { it.lowercase() }
+    fun add() {
+        if (typed.isEmpty() || bad.isNotEmpty()) return
+        list = (list + typed).distinctBy { it.lowercase() }; input = ""
+    }
+}
+
+/** A list of e-mail addresses, each removable, with a box to add more (one at a time or comma-separated). */
+@Composable
+private fun AddressListEditor(kind: String, hint: String, s: AddressListState) =
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("$kind · $hint", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = LineC)
+        s.list.forEach { addr ->
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Panel).padding(start = 12.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.AlternateEmail, null, tint = Steel, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(10.dp))
+                Text(addr, color = LineC, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                IconButton({ s.list = s.list - addr }) { Icon(Icons.Default.Close, "Remove $addr from $kind", tint = Steel) }
+            }
+        }
+        val bad = s.bad
+        OutlinedTextField(s.input, { s.input = it }, label = { Text("Add $kind e-mail") }, singleLine = true,
+            leadingIcon = { Icon(Icons.Default.PersonAdd, null) },
+            trailingIcon = { IconButton({ s.add() }, enabled = s.typed.isNotEmpty() && bad.isEmpty()) { Icon(Icons.Default.Add, "Add to $kind") } },
+            isError = bad.isNotEmpty(),
+            supportingText = { Text(if (bad.isNotEmpty()) "Not a full e-mail address: ${bad.joinToString(", ")}"
+                else "Separate several with commas, or add them one at a time") },
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                keyboardType = androidx.compose.ui.text.input.KeyboardType.Email,
+                imeAction = androidx.compose.ui.text.input.ImeAction.Done),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { s.add() }),
+            modifier = Modifier.fillMaxWidth(), colors = darkFieldColors())
+    }

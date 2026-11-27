@@ -22,12 +22,43 @@ import javax.mail.util.ByteArrayDataSource
 data class SmtpSettings(
     val host: String = "", val port: Int = 587, val user: String = "", val password: String = "",
     val from: String = "", val fromName: String = "",
-    val company: CompanyInfo = CompanyInfo()
+    val company: CompanyInfo = CompanyInfo(),
+    /** Addresses copied (CC) on every mail sent to a visitor: thank-you, updated thank-you and reminders. */
+    val cc: List<String> = emptyList(),
+    /** Addresses blind-copied (BCC) on the same mails; the visitor does not see them. */
+    val bcc: List<String> = emptyList()
 ) {
     val complete get() = host.isNotBlank() && user.isNotBlank() && password.isNotBlank()
 
+    /**
+     * The configured CC addresses for a mail that already goes to [already] (TO and any other CC):
+     * invalid entries and addresses already on the mail are left out. Pure, so it can be unit-tested.
+     */
+    fun ccFor(already: List<String>): List<String> = pick(cc, already)
+
+    /** The configured BCC addresses, leaving out any already in TO or CC ([already]). */
+    fun bccFor(already: List<String>): List<String> = pick(bcc, already)
+
+    private fun pick(list: List<String>, already: List<String>): List<String> {
+        val seen = already.map { it.trim().lowercase() }.toMutableSet()
+        return list.map { it.trim() }.filter { ThankYou.isValidEmail(it) && seen.add(it.lowercase()) }
+    }
+
+    /** Sets CC and BCC on [msg], which already has its TO set to [to] and, optionally, [extraCc] in CC. */
+    internal fun addCopies(msg: MimeMessage, to: List<String>, extraCc: List<String> = emptyList()) {
+        val allCc = extraCc + ccFor(to + extraCc)
+        val allBcc = bccFor(to + allCc)
+        if (allCc.isNotEmpty()) msg.setRecipients(Message.RecipientType.CC, InternetAddress.parse(allCc.joinToString(","), true))
+        if (allBcc.isNotEmpty()) msg.setRecipients(Message.RecipientType.BCC, InternetAddress.parse(allBcc.joinToString(","), true))
+    }
+
     companion object {
         private const val P = "smtp."
+
+        /** Splits typed or stored CC text on commas, semicolons, spaces and new lines; blanks dropped, duplicates removed. */
+        fun parseCc(text: String): List<String> =
+            text.split(',', ';', ' ', '\n', '\r', '\t').map { it.trim() }.filter { it.isNotEmpty() }
+                .distinctBy { it.lowercase() }
         fun load(ctx: Context): SmtpSettings {
             val p = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
             return SmtpSettings(
@@ -43,7 +74,9 @@ data class SmtpSettings(
                     phone = p.getString(P + "coPhone", null) ?: "",
                     email = p.getString(P + "coEmail", null) ?: "",
                     website = p.getString(P + "coWebsite", null) ?: "")
-                    .let { if (it.isEmpty) Brand.companyDefaults else it })
+                    .let { if (it.isEmpty) Brand.companyDefaults else it },
+                cc = parseCc(p.getString(P + "cc", null) ?: ""),
+                bcc = parseCc(p.getString(P + "bcc", null) ?: ""))
         }
         fun save(ctx: Context, s: SmtpSettings) {
             ctx.getSharedPreferences("settings", Context.MODE_PRIVATE).edit()
@@ -51,7 +84,9 @@ data class SmtpSettings(
                 .putString(P + "user", s.user.trim()).putString(P + "password", s.password)
                 .putString(P + "from", s.from.trim()).putString(P + "fromName", s.fromName.trim())
                 .putString(P + "coAddress", s.company.address.trim()).putString(P + "coPhone", s.company.phone.trim())
-                .putString(P + "coEmail", s.company.email.trim()).putString(P + "coWebsite", s.company.website.trim()).apply()
+                .putString(P + "coEmail", s.company.email.trim()).putString(P + "coWebsite", s.company.website.trim())
+                .putString(P + "cc", s.cc.map { it.trim() }.filter { it.isNotEmpty() }.joinToString(","))
+                .putString(P + "bcc", s.bcc.map { it.trim() }.filter { it.isNotEmpty() }.joinToString(",")).apply()
         }
     }
 }
@@ -411,9 +446,11 @@ object ThankYou {
     /** Blocking SMTP send; throws javax.mail.MessagingException on any failure. */
     fun send(c: SmtpSettings, v: Visitor, logo: ByteArray? = null, updated: Boolean = false) {
         val company = c.fromName.ifBlank { "our company" }
+        val to = v.mailableEmails().ifEmpty { listOf(v.email.trim()) }
         val msg = MimeMessage(session(c)).apply {
             setFrom(fromAddress(c, company))
-            setRecipients(Message.RecipientType.TO, InternetAddress.parse(v.mailableEmails().ifEmpty { listOf(v.email.trim()) }.joinToString(","), true))
+            setRecipients(Message.RecipientType.TO, InternetAddress.parse(to.joinToString(","), true))
+            c.addCopies(this, to)
             if (isValidEmail(v.attendedByEmail)) replyTo = arrayOf(InternetAddress(v.attendedByEmail.trim(), v.attendedByName.ifBlank { null }, "UTF-8"))
             setSubject(subject(company, updated), "UTF-8")
             setContent(content(body(v, company, updated, c.company), htmlBody(v, company, if (logo != null) LOGO_CID else null, updated, c.company), logo, MailPhotos.load(v)))

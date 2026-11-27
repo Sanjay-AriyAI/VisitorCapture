@@ -191,7 +191,8 @@ object ReminderMail {
         val msg = MimeMessage(ThankYou.session(c)).apply {
             setFrom(ThankYou.fromAddress(c, company))
             setRecipients(Message.RecipientType.TO, InternetAddress.parse(to, true))
-            if (cc != null) setRecipients(Message.RecipientType.CC, InternetAddress.parse(cc, true))
+            // staff member first in CC, then the configured CC list; configured BCC on top
+            c.addCopies(this, to.split(",").map { it.trim() }, listOfNotNull(cc))
             if (ThankYou.isValidEmail(v.attendedByEmail))
                 replyTo = arrayOf(InternetAddress(v.attendedByEmail.trim(), v.attendedByName.ifBlank { null }, "UTF-8"))
             setSubject(subject(kind, kind.at(v), company), "UTF-8")
