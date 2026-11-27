@@ -21,7 +21,7 @@ fun scheduleBadge(at: Long): String? =
 
 /** Staff step after Products: what came out of the conversation. Factory Visit / Follow-up ask for a date and time. */
 @Composable
-fun LeadOutcomeScreen(form: Form, onChange: (Form) -> Unit, staff: EmployeeInfo?, onBack: () -> Unit, onFinish: () -> Unit) = Scrolling {
+fun LeadOutcomeScreen(form: Form, onChange: (Form) -> Unit, staff: EmployeeInfo?, onBack: () -> Unit, onNext: () -> Unit) = Scrolling {
     val ctx = LocalContext.current
     var editing by remember { mutableStateOf<Reminder?>(null) }   // popup open for this tile
     var askExact by remember { mutableStateOf(false) }
@@ -93,7 +93,7 @@ fun LeadOutcomeScreen(form: Form, onChange: (Form) -> Unit, staff: EmployeeInfo?
 
     NavRow(
         { SecondaryButton("Back") { onBack() } },
-        { PrimaryButton("Finish", enabled = form.outcomes.isNotEmpty() && described) { onFinish() } })
+        { PrimaryButton("Next", enabled = form.outcomes.isNotEmpty() && described) { onNext() } })
 }
 
 /**

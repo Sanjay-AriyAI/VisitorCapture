@@ -68,7 +68,6 @@ fun VisitorLogScreen(
     var exporting by remember { mutableStateOf(false) }
     var menuOpen by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(setOf<Long>()) }
-    var editing by remember { mutableStateOf<Visitor?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     var clearText by remember { mutableStateOf("") }
@@ -144,14 +143,13 @@ fun VisitorLogScreen(
             items(list, key = { it.id }) { v ->
                 VisitorCard(v, fmt, expanded = v.id in expanded,
                     onToggle = { expanded = if (v.id in expanded) expanded - v.id else expanded + v.id },
-                    onEdit = { editing = v }, onDelete = { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); onDelete(v) }, onRetry = { onRetryThankYou(v) },
+                    onEdit = { onEdit(v) }, onDelete = { haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress); onDelete(v) }, onRetry = { onRetryThankYou(v) },
                     modifier = Modifier.animateItem())
             }
           }
         }
     }
 
-    editing?.let { v -> EditVisitorDialog(v, onDismiss = { editing = null }, onSave = { onEdit(it); editing = null }) }
     if (pickingRange) DateRangeDialog(range, onPick = { range = it; pickingRange = false }, onDismiss = { pickingRange = false })
     if (exporting) ExportDialog(visitors, range, matchesView, narrowed = query.isNotBlank() || filter != LogFilter.All,
         onExport = { list, r -> exporting = false; onExport(list, r) }, onDismiss = { exporting = false })
@@ -424,136 +422,41 @@ private fun Detail(label: String, value: String, modifier: Modifier = Modifier) 
     }
 }
 
-/** Edit a saved record. The UID, visit time, photos and thank-you status are left untouched. */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Unit) {
-    var name by remember { mutableStateOf(v.name) }
-    var title by remember { mutableStateOf(v.title) }
-    var company by remember { mutableStateOf(v.company) }
-    var email by remember { mutableStateOf(v.email) }
-    var extraEmails by remember { mutableStateOf(v.extraEmailList()) }
-    var website by remember { mutableStateOf(v.website) }
-    var phone by remember { mutableStateOf(v.phone) }
-    var extraPhones by remember { mutableStateOf(v.extraPhoneList()) }
-    var office by remember { mutableStateOf(v.officePhone) }
-    var address by remember { mutableStateOf(v.address) }
-    var state by remember { mutableStateOf(v.state) }
-    var country by remember { mutableStateOf(v.country) }
-    var customerType by remember { mutableStateOf(v.customerType) }
-    var market by remember { mutableStateOf(v.marketExposure) }
-    var other by remember { mutableStateOf(v.otherDetail) }
-    var interest by remember { mutableStateOf(v.additionalInterest) }
-    var outcomes by remember { mutableStateOf(v.leadOutcomes.split("; ").filter { it.isNotBlank() }.toSet()) }
-    var notes by remember { mutableStateOf(v.discussionNotes) }
-    var remark by remember { mutableStateOf(v.remarks) }
-    var remarkOther by remember { mutableStateOf(v.remarksOther) }
-    var followNote by remember { mutableStateOf(v.followUpNote) }
-    var factoryAt by remember { mutableStateOf(v.factoryVisitAt) }
-    var followAt by remember { mutableStateOf(v.followUpAt) }
-    var scheduling by remember { mutableStateOf<Reminder?>(null) }
-    @Composable fun field(label: String, value: String, multi: Boolean = false, set: (String) -> Unit) =
-        OutlinedTextField(value, set, label = { Text(label) }, singleLine = !multi, minLines = if (multi) 2 else 1,
-            modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), colors = darkFieldColors(filled = false))
-    @Composable fun chips(options: List<String>, selected: (String) -> Boolean, pick: (String) -> Unit) =
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            options.forEach { o -> OptionChip(o, selected(o)) { pick(o) } }
-        }
-    fun save() {
-        val (mail, extras) = splitEmails(email, extraEmails)
-        val (mainPhone, morePhones) = splitPhones(phone, extraPhones)
-        val newFactory = if (Reminder.FACTORY.outcome in outcomes) factoryAt else 0L
-        val newFollow = if (Brand.followUpOnDone || Reminder.FOLLOW_UP.outcome in outcomes) followAt else 0L
-        val edited = v.copy(name = name.trim(), title = title.trim(), company = company.trim(), email = mail, extraEmails = extras, website = website.trim(), phone = mainPhone, extraPhones = morePhones,
-            officePhone = IndianPhone.office(office) ?: office.trim(),
-            address = address.trim(), state = state.trim(), country = country.trim(),
-            customerType = customerType, marketExposure = market, otherDetail = other.trim(),
-            additionalInterest = interest.trim(),
-            leadOutcomes = LEAD_OUTCOMES.filter { it in outcomes }.joinToString("; "),
-            discussionNotes = notes.trim(), remarks = remark,
-            remarksOther = if (remark == "Others") remarkOther.trim() else "",
-            followUpNote = if (v.followUpAction == "Remarks") followNote.trim() else v.followUpNote,
-            // a corrected e-mail on a record that had none becomes mailable
-            thankYouStatus = if (v.thankYouStatus == "" && ThankYou.isValidEmail(mail)) ThankYou.PENDING else v.thankYouStatus,
-            factoryVisitAt = newFactory, followUpAt = newFollow)
-        // A new time re-schedules its reminder; an unchanged one keeps its status, unless a fixed e-mail makes an unsent one mailable.
-        fun status(old: Long, new: Long, s: String) =
-            if (old != new || (s != Reminder.SENT && s != Reminder.SCHEDULED && mail != v.email.trim())) Reminder.initialStatus(new, edited) else s
-        onSave(edited.copy(factoryReminderStatus = status(v.factoryVisitAt, newFactory, v.factoryReminderStatus),
-            followUpReminderStatus = status(v.followUpAt, newFollow, v.followUpReminderStatus)))
-    }
-    scheduling?.let { kind ->
-        if (Brand.followUpOnDone && kind == Reminder.FOLLOW_UP)   // follow-up is its own field here, not a lead outcome
-            ScheduleDialog(kind, followAt, onSave = { at -> followAt = at; scheduling = null },
-                onRemove = if (followAt > 0) ({ followAt = 0L; scheduling = null }) else null,
-                onDismiss = { scheduling = null })
-        else {
-        val ticked = kind.outcome in outcomes
-        ScheduleDialog(kind, if (!ticked) 0L else if (kind == Reminder.FACTORY) factoryAt else followAt,
-            onSave = { at ->
-                if (kind == Reminder.FACTORY) factoryAt = at else followAt = at
-                outcomes = outcomes + kind.outcome; scheduling = null
-            },
-            onRemove = if (ticked) ({ outcomes = outcomes - kind.outcome; scheduling = null }) else null,
-            onDismiss = { scheduling = null })
-        }
-    }
-    FormSheet("Edit visitor", onDismiss, onSave = { save() }, icon = Icons.Default.Edit) {
-                Text("ID: ${v.uid}", fontSize = 12.sp, color = Steel)
-                field("Name", name) { name = it }
-                field("Title", title) { title = it }
-                field("Company", company) { company = it }
-                field("Email", email) { email = it }
-                extraEmails.forEachIndexed { i, mail ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(mail, { v -> extraEmails = extraEmails.toMutableList().also { it[i] = v } },
-                            label = { Text(EXTRA_EMAIL_LABELS[i]) }, singleLine = true, modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp), colors = darkFieldColors(filled = false))
-                        IconButton({ extraEmails = extraEmails.filterIndexed { j, _ -> j != i } }) {
-                            Icon(Icons.Default.Close, "Remove ${EXTRA_EMAIL_LABELS[i].lowercase()}", tint = Steel)
-                        }
-                    }
-                }
-                if (extraEmails.size < MAX_EMAILS - 1)
-                    LinkButton(if (extraEmails.isEmpty()) "+ Add secondary e-mail" else "+ Add another e-mail") { extraEmails = extraEmails + "" }
-                field("Website", website) { website = it }
-                field("Phone", phone) { phone = it }
-                extraPhones.forEachIndexed { i, num ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(num, { v -> extraPhones = extraPhones.toMutableList().also { it[i] = v } },
-                            label = { Text(EXTRA_PHONE_LABELS[i]) }, singleLine = true, modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp), colors = darkFieldColors(filled = false))
-                        IconButton({ extraPhones = extraPhones.filterIndexed { j, _ -> j != i } }) {
-                            Icon(Icons.Default.Close, "Remove ${EXTRA_PHONE_LABELS[i].lowercase()}", tint = Steel)
-                        }
-                    }
-                }
-                if (extraPhones.size < MAX_PHONES - 1)
-                    LinkButton(if (extraPhones.isEmpty()) "+ Add secondary phone" else "+ Add another phone") { extraPhones = extraPhones + "" }
-                if (Brand.indianPhones || v.officePhone.isNotBlank()) field("Office number", office) { office = it }
-                field("Address", address, true) { address = it }
-                field("State", state) { state = it }
-                field("Country", country) { country = it }
-                Text("Customer type", fontSize = 12.sp, color = Steel)
-                chips(CUSTOMER_TYPES, { it == customerType }) { customerType = if (customerType == it) "" else it }
-                Text("Market exposure", fontSize = 12.sp, color = Steel)
-                chips(MARKET_EXPOSURE, { it == market }) { market = if (market == it) "" else it }
-                field(if (Brand.describeAnyProduct) "Product description" else "Other product detail", other, true) { other = it }
-                field("Also interested in", interest, true) { interest = it }
-                Text("Lead outcome", fontSize = 12.sp, color = Steel)
-                chips(LEAD_OUTCOMES, { it in outcomes }) { o ->
-                    val kind = Reminder.values().find { it.outcome == o }
-                    if (kind != null) scheduling = kind   // Factory Visit / Follow-up: pick the date and time first
-                    else outcomes = if (o in outcomes) outcomes - o else outcomes + o
-                }
-                if (Reminder.FACTORY.outcome in outcomes) scheduleBadge(factoryAt)?.let { Text("Factory visit: $it", fontSize = 12.sp, color = Steel) }
-                if (Brand.followUpOnDone)
-                    LinkButton(scheduleBadge(followAt)?.let { "Follow-up: $it (change)" } ?: "+ Schedule follow-up") { scheduling = Reminder.FOLLOW_UP }
-                else if (Reminder.FOLLOW_UP.outcome in outcomes) scheduleBadge(followAt)?.let { Text("Follow-up: $it", fontSize = 12.sp, color = Steel) }
-                field(if (Brand.outcomeDescriptionMin > 0) "Description" else "Discussion notes", notes, true) { notes = it }
-                Text("Remarks", fontSize = 12.sp, color = Steel)
-                chips(REMARK_OPTIONS, { it == remark }) { remark = if (remark == it) "" else it }
-                if (remark == "Others") field("Remarks (other)", remarkOther) { remarkOther = it }
-                if (v.followUpAction == "Remarks") field("Follow-up note", followNote, true) { followNote = it }
-    }
+/**
+ * [v] with the changes made on the visit pages (opened from Edit in the visitor log). The UID, visit time, card photos
+ * and mail history stay. A reminder whose time changed is re-armed; an unchanged one keeps its status, unless a fixed
+ * e-mail makes an unsent one mailable.
+ */
+fun applyVisitEdits(v: Visitor, f: Form, extraNote: String, notePhotos: List<File>, doneFollowAt: Long): Visitor {
+    val (mail, extras) = splitEmails(f.email, f.extraEmails)
+    val (mainPhone, morePhones) = splitPhones(f.phone, f.extraPhones)
+    val newFactory = if (Reminder.FACTORY.outcome in f.outcomes) f.factoryVisitAt else 0L
+    val newFollow = if (Brand.followUpOnDone) doneFollowAt else if (Reminder.FOLLOW_UP.outcome in f.outcomes) f.followUpAt else 0L
+    val edited = v.copy(name = f.name.trim(), title = f.title.trim(), company = f.company.trim(), email = mail, extraEmails = extras,
+        website = f.website.trim(), phone = mainPhone, extraPhones = morePhones,
+        officePhone = IndianPhone.office(f.officePhone) ?: f.officePhone.trim(),
+        address = f.address.trim(), state = f.state.trim(), country = f.country.trim(),
+        customerType = f.customerType.orEmpty(), marketExposure = f.marketExposure.orEmpty(),
+        products = f.products.joinToString("; "), otherDetail = f.otherDetail.trim(),
+        additionalInterest = extraNote.trim(), notePhotoPaths = notePhotos.joinToString("|") { it.absolutePath },
+        leadOutcomes = LEAD_OUTCOMES.filter { it in f.outcomes }.joinToString("; "),
+        discussionNotes = f.notes.trim(), remarks = f.remark.orEmpty(),
+        remarksOther = if (f.remark == "Others") f.remarkOther.trim() else "",
+        // a corrected e-mail on a record that had none becomes mailable
+        thankYouStatus = if (v.thankYouStatus == "" && ThankYou.isValidEmail(mail)) ThankYou.PENDING else v.thankYouStatus,
+        factoryVisitAt = newFactory, followUpAt = newFollow)
+    fun status(old: Long, new: Long, s: String) =
+        if (old != new || (s != Reminder.SENT && s != Reminder.SCHEDULED && mail != v.email.trim())) Reminder.initialStatus(new, edited) else s
+    return edited.copy(factoryReminderStatus = status(v.factoryVisitAt, newFactory, v.factoryReminderStatus),
+        followUpReminderStatus = status(v.followUpAt, newFollow, v.followUpReminderStatus))
 }
+
+/** A saved record loaded back into the visit pages for editing. */
+fun Visitor.toForm() = Form(name = name, title = title, company = company, phone = phone, email = email,
+    extraPhones = extraPhoneList(), officePhone = officePhone, extraEmails = extraEmailList(), website = website,
+    address = address, state = state, country = country,
+    customerType = customerType.ifBlank { null }, marketExposure = marketExposure.ifBlank { null },
+    products = products.split("; ").map { it.trim() }.filter { it.isNotBlank() }.toSet(), otherDetail = otherDetail,
+    outcomes = leadOutcomes.split("; ").map { it.trim() }.filter { it.isNotBlank() }.toSet(), notes = discussionNotes,
+    remark = remarks.ifBlank { null }, remarkOther = remarksOther,
+    factoryVisitAt = factoryVisitAt, followUpAt = followUpAt)

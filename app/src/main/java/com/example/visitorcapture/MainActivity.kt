@@ -162,62 +162,35 @@ fun App() {
     var showRaw by remember { mutableStateOf(false) }
     val isDebugBuild = (ctx.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
-    // Notes typed on the Done screen are written to the visitor saved a moment earlier.
-    var lastUid by remember { mutableStateOf<String?>(null) }
+    // The Done screen is the last step of the visit: what is added there (note, photos, follow-up) is kept here and
+    // goes into the visitor record when staff tap "Finish & log next visitor". Nothing is saved before that.
     var extraNote by remember { mutableStateOf("") }
-    var extraSaved by remember { mutableStateOf("") }
-    fun persistExtra() {
-        val uid = lastUid ?: return
-        val t = extraNote.trim()
-        if (t == extraSaved) return
-        extraSaved = t
-        scope.launch { db.dao().setAdditionalInterest(uid, t) }
-    }
 
     // Photos / uploads of handwritten enquiries attached on the Done screen. Saved as image files on the visitor.
     var notePhotos by remember { mutableStateOf(listOf<File>()) }
     var pendingNote by remember { mutableStateOf<File?>(null) }
-    var noteBusy by remember { mutableStateOf(false) }      // camera / picker open or copying: holds the auto-reset
+    var noteBusy by remember { mutableStateOf(false) }      // camera / picker open or copying
     var noteError by remember { mutableStateOf<String?>(null) }
-    fun persistNotes() {
-        val uid = lastUid ?: return
-        val paths = notePhotos.joinToString("|") { it.absolutePath }
-        scope.launch { db.dao().setNotePhotos(uid, paths) }
-    }
 
-    // "Send automatically": the mail is queued on leaving the Done screen, so what was added there goes with it.
-    var mailAfterDone by remember { mutableStateOf(false) }
-    fun releaseMail() {
-        val uid = lastUid ?: return
-        if (!mailAfterDone) return
-        mailAfterDone = false
-        val note = extraNote.trim()
-        scope.launch {
-            db.dao().setAdditionalInterest(uid, note)
-            db.dao().queueThankYou(uid)
-            ThankYouWorker.enqueue(ctx)
-        }
-    }
-
-    // Follow-up picked on the Done screen (Brand.followUpOnDone): written to the visitor saved a moment earlier.
+    // Follow-up picked on the Done screen (Brand.followUpOnDone).
     var doneFollowAt by remember { mutableLongStateOf(0L) }
     var doneFollowEdit by remember { mutableStateOf(false) }
-    fun setDoneFollowUp(at: Long) {
-        val uid = lastUid ?: return
-        doneFollowAt = at
-        scope.launch {
-            val v = db.dao().byUid(uid) ?: return@launch
-            val updated = v.copy(followUpAt = at, followUpReminderStatus = Reminder.initialStatus(at, v))
-            db.dao().setFollowUp(uid, at, updated.followUpReminderStatus)
-            Reminders.schedule(ctx, updated)   // arms the 24-hour reminder, or disarms it when removed
-        }
-    }
+    var confirmFinish by remember { mutableStateOf(false) }   // "save this visit?" pop-up on the Done screen
 
-    fun reset() {
-        persistExtra()
-        releaseMail()
-        doneFollowAt = 0L; doneFollowEdit = false
-        lastUid = null; extraNote = ""; extraSaved = ""
+    // Edit from the visitor log: the saved record is loaded into these same pages. Null = a new visit.
+    var editingVisitor by remember { mutableStateOf<Visitor?>(null) }
+    var editOriginalNotes by remember { mutableStateOf(setOf<File>()) }   // note images already saved on that record
+    var pendingEdit by remember { mutableStateOf<Visitor?>(null) }        // Edit tapped while another visit is open
+
+    /**
+     * Clears the visit. [saved] false = it was discarded, so the note images taken for it are deleted
+     * (never the ones already saved on an edited record).
+     */
+    fun reset(saved: Boolean = false) {
+        if (!saved) (notePhotos - editOriginalNotes).forEach { it.delete() }
+        editingVisitor = null; editOriginalNotes = emptySet()
+        doneFollowAt = 0L; doneFollowEdit = false; confirmFinish = false
+        extraNote = ""
         notePhotos = emptyList(); pendingNote = null; noteBusy = false; noteError = null
         form = Form(); photoFile = null; photoTaken = false; backFile = null; backTaken = false
         ocrError = false; fieldHints = emptyMap(); nameError = false; emailTried = false; visitStart = 0L; screen = Screen.Welcome
@@ -289,13 +262,13 @@ fun App() {
 
     // Note images live next to the card photos (cards/ is already shared with the camera via the FileProvider).
     fun newNoteFile(ext: String): File? {
-        val uid = lastUid ?: return null
+        val stamp = if (visitStart > 0L) visitStart else System.currentTimeMillis()
         val dir = File(ctx.filesDir, "cards").apply { mkdirs() }
-        return File(dir, "${uid}_note_${System.currentTimeMillis()}_${notePhotos.size}.$ext")
+        return File(dir, "visit${stamp}_note_${System.currentTimeMillis()}_${notePhotos.size}.$ext")
     }
     val takeNotePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         val f = pendingNote
-        if (ok && f != null && f.length() > 0) { notePhotos = notePhotos + f; persistNotes() } else f?.delete()
+        if (ok && f != null && f.length() > 0) { notePhotos = notePhotos + f } else f?.delete()
         pendingNote = null; noteBusy = false
     }
     fun launchNoteCamera() {
@@ -325,7 +298,7 @@ fun App() {
                     } catch (e: Exception) { f.delete(); null }
                 }
             }
-            if (copied.isNotEmpty()) { notePhotos = notePhotos + copied; persistNotes() }
+            if (copied.isNotEmpty()) { notePhotos = notePhotos + copied }
             noteError = when {
                 copied.size < uris.take(room).size -> "Some images couldn't be added."
                 uris.size > room -> "Only $MAX_NOTE_PHOTOS images can be attached; the rest were skipped."
@@ -340,7 +313,8 @@ fun App() {
         uploadNotes.launch("image/*")
     }
     fun removeNote(f: File) {
-        notePhotos = notePhotos - f; f.delete(); persistNotes()
+        notePhotos = notePhotos - f
+        if (f !in editOriginalNotes) f.delete()   // an image already saved on an edited record goes only when the edit is saved
     }
 
     val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
@@ -357,12 +331,11 @@ fun App() {
     }
 
     fun save() {
-        val at = if (visitStart > 0L) visitStart else System.currentTimeMillis()   // date and time of the visit
-        loggedAt = at
+        val at = loggedAt.takeIf { it > 0L } ?: System.currentTimeMillis()   // date and time of the visit (set on entering Done)
         val e = employee
         // A time only counts while its tile is ticked, so a changed mind never leaves a stale reminder behind.
         val factoryAt = if (Reminder.FACTORY.outcome in form.outcomes) form.factoryVisitAt else 0L
-        val followAt = if (!Brand.followUpOnDone && Reminder.FOLLOW_UP.outcome in form.outcomes) form.followUpAt else 0L
+        val followAt = if (Brand.followUpOnDone) doneFollowAt else if (Reminder.FOLLOW_UP.outcome in form.outcomes) form.followUpAt else 0L
         val uidPrefix = UidGen.prefix(e?.name.orEmpty(), deviceName, at)
         val (mainEmail, extraEmails) = splitEmails(form.email, form.extraEmails)
         val (mainPhone, extraPhones) = splitPhones(form.phone, form.extraPhones)
@@ -381,20 +354,20 @@ fun App() {
             discussionNotes = form.notes.trim(), remarks = form.remark.orEmpty(),
             remarksOther = if (form.remark == "Others") form.remarkOther.trim() else "",
             factoryVisitAt = factoryAt, followUpAt = followAt,
+            additionalInterest = extraNote.trim(), notePhotoPaths = notePhotos.joinToString("|") { it.absolutePath },
             thankYouStatus = ThankYou.initialStatus(mainEmail)).let {
                 it.copy(factoryReminderStatus = Reminder.initialStatus(factoryAt, it),
                     followUpReminderStatus = Reminder.initialStatus(followAt, it))
             }
-        // "Send automatically" (Settings) queues the mail when the Done screen is left; otherwise it waits (PENDING) for the Mail settings button.
+        // "Send automatically" (Settings) queues the mail right away; otherwise it waits (PENDING) for the Mail settings button.
         val autoSend = appSettings.autoThankYou && v.thankYouStatus == ThankYou.PENDING && SmtpSettings.load(ctx).complete
-        extraNote = ""; extraSaved = ""
         scope.launch {
             val uid = UidGen.withSeq(uidPrefix, db.dao().countUidPrefix(uidPrefix))
-            lastUid = uid
             val saved = v.copy(uid = uid)
             db.dao().insert(saved)
-            mailAfterDone = autoSend
+            if (autoSend) { db.dao().queueThankYou(uid); ThankYouWorker.enqueue(ctx) }
             Reminders.schedule(ctx, saved)   // 24-hour reminder mails, sent in the background even if the app is closed
+            snackbar.showSnackbar("Visit saved")
         }
     }
 
@@ -439,20 +412,58 @@ fun App() {
         }
     }
 
-    // The Done screen stays open until staff press "Log next visitor now" (no auto-reset).
-    // Save the note shortly after the last keystroke (reset() also saves it, so nothing is lost).
-    LaunchedEffect(extraNote) { delay(700); persistExtra() }
+    // The visit is saved only from the Done screen ("Finish & log next visitor", after a confirmation).
 
     // ---- side menu, settings and page switching ----
     val menuAvailable = employee != null && screen != Screen.Login
-    val midVisit = screen !in setOf(Screen.Login, Screen.Welcome, Screen.Done)
+    val midVisit = screen !in setOf(Screen.Login, Screen.Welcome)   // the Done screen isn't saved yet either
     val mailConfigured = remember(section, visitors) { SmtpSettings.load(ctx).complete }
     fun go(s: AppPage) { section = s; scope.launch { drawerState.close() } }
     fun startNewVisit() {
         scope.launch { drawerState.close() }
         if (midVisit && appSettings.confirmAbandon) confirmDiscard = true else { reset(); section = AppPage.Visit }
     }
-    fun switchUser() { releaseMail(); section = AppPage.Visit; screen = Screen.Login; scope.launch { drawerState.close() } }
+    fun switchUser() { section = AppPage.Visit; screen = Screen.Login; scope.launch { drawerState.close() } }
+
+    /** Edit from the visitor log: the saved record opens in the same pages it was entered on, starting at Details. */
+    fun startEdit(v: Visitor) {
+        reset()
+        form = v.toForm(); extraNote = v.additionalInterest
+        notePhotos = v.notePhotoPaths.split("|").filter { it.isNotBlank() }.map(::File)
+        editOriginalNotes = notePhotos.toSet()
+        doneFollowAt = if (Brand.followUpOnDone) v.followUpAt else 0L
+        visitStart = v.createdAt; loggedAt = v.createdAt
+        photoFile = v.cardPhotoPath?.let(::File); photoTaken = photoFile?.exists() == true
+        backFile = v.cardBackPhotoPath?.let(::File); backTaken = backFile?.exists() == true
+        editingVisitor = v; section = AppPage.Visit; screen = Screen.Details
+    }
+    // Another visit (new or being edited) is open: ask before it is dropped.
+    fun openEdit(v: Visitor) { if (midVisit) pendingEdit = v else startEdit(v) }
+
+    /** "Save changes" on the last page of an edit. */
+    fun finishEdit() {
+        val original = editingVisitor ?: return
+        val old = visitors.find { it.uid == original.uid } ?: original
+        val edited = applyVisitEdits(old, form, extraNote, notePhotos, doneFollowAt)
+        (editOriginalNotes - notePhotos.toSet()).forEach { it.delete() }   // images removed during the edit
+        // Already mailed and the visitor-facing details changed: send the "updated, final version" mail.
+        val resend = ThankYou.needsUpdateMail(old, edited)
+        val auto = resend && appSettings.autoThankYou && SmtpSettings.load(ctx).complete
+        val v = if (resend) edited.copy(thankYouStatus = if (auto) ThankYou.QUEUED else ThankYou.PENDING) else edited
+        scope.launch {
+            db.dao().update(v)
+            if (auto) ThankYouWorker.enqueue(ctx)
+            Reminders.schedule(ctx, v)   // re-arms a changed factory visit / follow-up time, disarms a removed one
+            snackbar.showSnackbar(when {
+                !resend -> "Changes saved"
+                auto -> "Saved. Updated mail will be sent to ${v.mailableEmails().joinToString(", ")}"
+                else -> "Saved. Updated mail is waiting in Mail settings"
+            })
+        }
+        reset(saved = true); section = AppPage.Logs
+    }
+    var confirmCancelEdit by remember { mutableStateOf(false) }
+    fun cancelEdit() { reset(); section = AppPage.Logs }
     fun startVisit(manual: Boolean) {
         visitStart = System.currentTimeMillis()
         if (form.country.isBlank()) form = form.copy(country = appSettings.defaultCountry.trim())
@@ -475,12 +486,12 @@ fun App() {
         else when (screen) {
             Screen.Login -> screen = Screen.Welcome
             Screen.Capture -> screen = Screen.Welcome
-            Screen.Details -> screen = detailsBack
+            Screen.Details -> if (editingVisitor != null) confirmCancelEdit = true else screen = detailsBack
             Screen.Customer -> screen = Screen.Details
             Screen.Products -> screen = Screen.Customer
             Screen.Catalog -> screen = Screen.Products
             Screen.LeadOutcome -> screen = Screen.Products
-            Screen.Done -> reset()
+            Screen.Done -> screen = Screen.LeadOutcome
             else -> {}
         }
     }
@@ -502,7 +513,7 @@ fun App() {
         drawerContent = {
             AppDrawer(section, employee, deviceName, visitorCount = visitors.size,
                 mailPending = visitors.count { it.thankYouStatus == ThankYou.PENDING }, mailConfigured = mailConfigured,
-                visitInProgress = midVisit || screen == Screen.Done,
+                visitInProgress = midVisit,
                 onSelect = { go(it) }, onNewVisit = { startNewVisit() }, onSwitchUser = { switchUser() })
         }) {
         Box(Modifier.fillMaxSize().background(Navy).systemBarsPadding().imePadding()) {   // content shrinks above the keyboard
@@ -515,20 +526,7 @@ fun App() {
                 onEdit = { updated -> editProfile(updated) }, onBack = { section = AppPage.Visit })
             AppPage.Logs -> VisitorLogScreen(visitors, onBack = { section = AppPage.Visit },
                 onExport = { list, range -> exportData(list, range) }, onImport = { importPicker.launch(arrayOf("*/*")) },
-                onEdit = { edited ->
-                    // Already mailed and the visitor-facing details changed: send the "updated, final version" mail.
-                    val old = visitors.find { it.uid == edited.uid }
-                    val resend = old != null && ThankYou.needsUpdateMail(old, edited)
-                    val auto = resend && appSettings.autoThankYou && SmtpSettings.load(ctx).complete
-                    val v = if (resend) edited.copy(thankYouStatus = if (auto) ThankYou.QUEUED else ThankYou.PENDING) else edited
-                    scope.launch {
-                        db.dao().update(v)
-                        if (auto) ThankYouWorker.enqueue(ctx)
-                        Reminders.schedule(ctx, v)   // re-arms a changed factory visit / follow-up time, disarms a removed one
-                        if (resend) snackbar.showSnackbar(if (auto) "Saved. Updated mail will be sent to ${v.mailableEmails().joinToString(", ")}"
-                            else "Saved. Updated mail is waiting in Mail settings")
-                    }
-                },
+                onEdit = { v -> openEdit(v) },
                 onDelete = { v ->
                     // Removed at once with an Undo; photos are only deleted once the snackbar goes away without Undo.
                     scope.launch {
@@ -670,8 +668,9 @@ fun App() {
                             // header: title + the scanned card, if there is one
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
-                                    Text("Confirm details", style = MaterialTheme.typography.headlineMedium, color = LineC)
-                                    Text(if (photoTaken) "We prefilled what we could read. Fix anything that's off."
+                                    Text(if (editingVisitor != null) "Edit details" else "Confirm details", style = MaterialTheme.typography.headlineMedium, color = LineC)
+                                    Text(if (editingVisitor != null) "Change anything, then continue through the pages and save at the end."
+                                        else if (photoTaken) "We prefilled what we could read. Fix anything that's off."
                                         else "Type in the visitor's details.", fontSize = 14.sp, color = Steel)
                                 }
                                 if (photoTaken && photoFile != null) {
@@ -744,7 +743,8 @@ fun App() {
                                 }
                             }
                             NavRow(
-                                { SecondaryButton("Back", icon = Icons.AutoMirrored.Filled.ArrowBack) { screen = detailsBack } },
+                                { if (editingVisitor != null) SecondaryButton("Cancel", icon = Icons.Default.Close) { confirmCancelEdit = true }
+                                  else SecondaryButton("Back", icon = Icons.AutoMirrored.Filled.ArrowBack) { screen = detailsBack } },
                                 { PrimaryButton("Continue", trailingIcon = Icons.AutoMirrored.Filled.ArrowForward) {
                                     // the visitor's name is mandatory
                                     if (form.name.isBlank()) { nameError = true; scope.launch { snackbar.showSnackbar("Enter the visitor's full name to continue") } }
@@ -823,7 +823,8 @@ fun App() {
                             onDone = { screen = Screen.Products })
 
                         Screen.LeadOutcome -> LeadOutcomeScreen(form, { form = it }, employee,
-                            onBack = { screen = Screen.Products }, onFinish = { save(); screen = Screen.Done })
+                            onBack = { screen = Screen.Products },
+                            onNext = { loggedAt = if (visitStart > 0L) visitStart else System.currentTimeMillis(); screen = Screen.Done })
 
                         Screen.Done -> Centered {
                             val first = form.name.split(" ").firstOrNull().orEmpty()
@@ -836,14 +837,14 @@ fun App() {
                             val summary = listOfNotNull(form.customerType, form.marketExposure) + form.products.groupBy { it.substringBefore(" > ") }
                                 .map { (p, l) -> if (l.any { " > " in it }) "$p (${l.size})" else p }
                             Text(summary.joinToString("  •  "), color = AmberText, textAlign = TextAlign.Center)
-                            Text("Visit logged " + SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()).format(Date(loggedAt)) +
+                            Text("Visit on " + SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()).format(Date(loggedAt)) +
                                 (employee?.let { " · attended by ${it.name}" } ?: ""), color = Steel, fontSize = 13.sp, textAlign = TextAlign.Center)
                             if (Brand.followUpOnDone) Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text("Follow-up", fontWeight = FontWeight.SemiBold)
                                 val badge = scheduleBadge(doneFollowAt)
                                 Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
                                     .border(1.dp, if (badge != null) Amber else Steel.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
-                                    .clickable(enabled = lastUid != null) { doneFollowEdit = true }.padding(12.dp),
+                                    .clickable { doneFollowEdit = true }.padding(12.dp),
                                     verticalAlignment = Alignment.CenterVertically) {
                                     Icon(Icons.Default.EventRepeat, null, tint = if (badge != null) AmberText else Steel)
                                     Column(Modifier.weight(1f).padding(start = 12.dp)) {
@@ -851,14 +852,14 @@ fun App() {
                                         Text(if (badge != null) "Reminder e-mail 24 hours before. Tap to change." else "Optional. Pick a date and time.",
                                             color = Steel, fontSize = 13.sp)
                                     }
-                                    if (badge != null) IconButton({ setDoneFollowUp(0L) }) {
+                                    if (badge != null) IconButton({ doneFollowAt = (0L) }) {
                                         Icon(Icons.Default.Close, "Remove follow-up", tint = Steel)
                                     }
                                 }
                             }
                             if (doneFollowEdit) ScheduleDialog(Reminder.FOLLOW_UP, doneFollowAt,
-                                onSave = { at -> setDoneFollowUp(at); doneFollowEdit = false },
-                                onRemove = if (doneFollowAt > 0) ({ setDoneFollowUp(0L); doneFollowEdit = false }) else null,
+                                onSave = { at -> doneFollowAt = (at); doneFollowEdit = false },
+                                onRemove = if (doneFollowAt > 0) ({ doneFollowAt = (0L); doneFollowEdit = false }) else null,
                                 onDismiss = { doneFollowEdit = false })
                             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text("Anything else you're interested in?", fontWeight = FontWeight.SemiBold)
@@ -884,15 +885,31 @@ fun App() {
                                 }
                                 if (notePhotos.isNotEmpty()) Text("${notePhotos.size} image(s) attached. Saved with this visit.", color = Steel, fontSize = 12.sp)
                                 noteError?.let { Text(it, color = Color_F0C3B8, fontSize = 12.sp) }
-                                Text(when {
-                                    extraNote.isBlank() -> "Optional. Saved automatically."
-                                    extraNote.trim() == extraSaved -> "Saved"
-                                    else -> "Saving…"
-                                }, color = Steel, fontSize = 12.sp)
+                                Text("Optional. Saved with the visit when you finish.", color = Steel, fontSize = 12.sp)
                             }
-                            Text("Thanks for stopping by. Someone from our team will follow up. Tap \"Log next visitor now\" when you're done.",
+                            val editing = editingVisitor != null
+                            Text(if (editing) "Check everything, then tap \"Save changes\" to update this visitor."
+                                else "Thanks for stopping by. Someone from our team will follow up. Tap \"Finish & log next visitor\" to save this visit.",
                                 color = Steel, textAlign = TextAlign.Center)
-                            PrimaryButton("Log next visitor", icon = Icons.Default.PersonAdd) { reset() }
+                            NavRow(
+                                { SecondaryButton("Back") { screen = Screen.LeadOutcome } },
+                                { if (editing) PrimaryButton("Save changes", enabled = !noteBusy, icon = Icons.Default.Check) { confirmFinish = true }
+                                  else PrimaryButton("Finish & log next visitor", enabled = !noteBusy, icon = Icons.Default.PersonAdd) { confirmFinish = true } })
+                            if (confirmFinish && editing) AlertDialog(
+                                onDismissRequest = { confirmFinish = false },
+                                icon = { Icon(Icons.Default.CheckCircle, null, tint = Amber) },
+                                title = { Text("Save changes?") },
+                                text = { Text("This visitor's log will be updated with your changes and you'll go back to the Visitor log.") },
+                                confirmButton = { TextButton({ finishEdit() }) { Text("Save", color = AmberText, fontWeight = FontWeight.Bold) } },
+                                dismissButton = { TextButton({ confirmFinish = false }) { Text("Keep editing") } })
+                            else if (confirmFinish) AlertDialog(
+                                onDismissRequest = { confirmFinish = false },
+                                icon = { Icon(Icons.Default.CheckCircle, null, tint = Amber) },
+                                title = { Text("Save this visit?") },
+                                text = { Text("The visitor log will be saved and you'll move on to the next visitor. " +
+                                    "You can still edit it later from the Visitor log.") },
+                                confirmButton = { TextButton({ save(); reset(saved = true) }) { Text("Save & next", color = AmberText, fontWeight = FontWeight.Bold) } },
+                                dismissButton = { TextButton({ confirmFinish = false }) { Text("Keep editing") } })
                         }
                     }
                   }   // AnimatedContent(screen)
@@ -916,6 +933,22 @@ fun App() {
                 text = { Text("The visit in progress hasn't been saved. Start a new visit anyway?") },
                 confirmButton = { TextButton({ confirmDiscard = false; reset(); section = AppPage.Visit }) { Text("Discard", color = Danger) } },
                 dismissButton = { TextButton({ confirmDiscard = false }) { Text("Keep editing") } })
+            if (confirmCancelEdit) AlertDialog(
+                onDismissRequest = { confirmCancelEdit = false },
+                icon = { Icon(Icons.Default.Warning, null, tint = Amber) },
+                title = { Text("Discard changes?") },
+                text = { Text("Your changes to this visitor won't be saved.") },
+                confirmButton = { TextButton({ confirmCancelEdit = false; cancelEdit() }) { Text("Discard", color = Danger) } },
+                dismissButton = { TextButton({ confirmCancelEdit = false }) { Text("Keep editing") } })
+            pendingEdit?.let { next ->
+                AlertDialog(
+                    onDismissRequest = { pendingEdit = null },
+                    icon = { Icon(Icons.Default.Warning, null, tint = Amber) },
+                    title = { Text("Discard the open visit?") },
+                    text = { Text("A visit is still open and hasn't been saved. Discard it and edit ${next.name.ifBlank { "this visitor" }}?") },
+                    confirmButton = { TextButton({ pendingEdit = null; startEdit(next) }) { Text("Discard & edit", color = Danger) } },
+                    dismissButton = { TextButton({ pendingEdit = null }) { Text("Cancel") } })
+            }
             mailSuccess?.let { msg ->
                 AlertDialog(onDismissRequest = { mailSuccess = null },
                     icon = { Icon(Icons.Default.CheckCircle, null, tint = Amber, modifier = Modifier.size(40.dp)) },
