@@ -51,6 +51,11 @@ interface BrandSpec {
     val leadOutcomes: List<String> get() = listOf("Product Enquiry", "Sample Request", "General Enquiry", "Order", "Factory Visit", "Follow-up")
     /** > 0: once a purpose is picked, a description of at least this many characters is required (saved as discussion notes). */
     val outcomeDescriptionMin: Int get() = 0
+    /**
+     * True: phone, secondary and third phone must be 10-digit Indian mobiles, and a landline goes in its own
+     * "Office number" field ("0422 2673333"). Visitors from other countries keep their numbers as typed. See IndianPhone.
+     */
+    val indianPhones: Boolean get() = false
     /** True: the follow-up date and time is set on the Done screen instead of as a "Purpose of visit" tile. */
     val followUpOnDone: Boolean get() = false
 

@@ -95,6 +95,7 @@ data class Form(
     val name: String = "", val title: String = "", val company: String = "",
     val phone: String = "", val email: String = "",
     val extraPhones: List<String> = emptyList(),   // secondary / third phone fields, at most MAX_PHONES - 1
+    val officePhone: String = "",                  // landline, "0422 2673333" (Brand.indianPhones only)
     val extraEmails: List<String> = emptyList(),   // secondary / third e-mail fields, at most MAX_EMAILS - 1
     val website: String = "",
     val address: String = "", val state: String = "", val country: String = "",
@@ -149,6 +150,13 @@ fun App() {
     var nameError by remember { mutableStateOf(false) }                       // Continue tapped with no name: show the error
     var emailTried by remember { mutableStateOf(false) }                      // Continue tapped: show e-mail format errors
     fun emailErr(s: String) = if (emailTried && s.isNotBlank() && !ThankYou.isValidEmail(s)) "Enter a valid e-mail (e.g. name@company.com)" else null
+    // Brand.indianPhones (LRT): 10-digit mobiles plus an office landline, for Indian visitors (country blank or India).
+    fun indianNumbers() = Brand.indianPhones && IndianPhone.applies(form.country, appSettings.defaultCountry)
+    fun mobileErr(s: String) = if (emailTried && indianNumbers() && s.isNotBlank() && IndianPhone.mobile(s) == null)
+        "Enter a 10-digit mobile number (e.g. 9876543210)" else null
+    fun officeErr(s: String) = if (emailTried && indianNumbers() && s.isNotBlank() && IndianPhone.office(s) == null)
+        "Enter the number with its STD code (e.g. 0422 2673333)" else null
+    fun typedMobile(s: String) = if (indianNumbers()) IndianPhone.typingMobile(s) else s.filter(Char::isDigit)
     // What the scanner actually read, shown only in debug builds so a wrong field can be traced to its cause.
     var ocrRaw by remember { mutableStateOf("") }
     var showRaw by remember { mutableStateOf(false) }
@@ -230,6 +238,14 @@ fun App() {
                 form = form.copy(name = p.name, title = p.title, company = p.company, phone = p.phone, extraPhones = p.extraPhones, email = p.email, extraEmails = p.extraEmails, website = p.website,
                     address = p.address, state = p.state, country = p.country.ifBlank { appSettings.defaultCountry.trim() })
                 fieldHints = p.flags; ocrError = false; ocrRaw = p.raw
+                if (indianNumbers()) {
+                    // Mobiles fill phone / secondary / third as 10 digits; the first landline becomes the office number.
+                    val numbers = (listOf(p.phone) + p.extraPhones).filter { it.isNotBlank() }
+                    val mobiles = numbers.mapNotNull { IndianPhone.mobile(it) }.distinct().take(MAX_PHONES)
+                    val office = numbers.firstNotNullOfOrNull { IndianPhone.office(it) }.orEmpty()
+                    form = form.copy(phone = mobiles.firstOrNull().orEmpty(), extraPhones = mobiles.drop(1), officePhone = office)
+                    if (mobiles.isEmpty() && office.isNotEmpty()) fieldHints = fieldHints + ("phone" to "Only an office number was found on the card. Please type the mobile number.")
+                }
             }
             screen = Screen.Details
         }
@@ -352,7 +368,7 @@ fun App() {
         val (mainPhone, extraPhones) = splitPhones(form.phone, form.extraPhones)
         val v = Visitor(uid = uidPrefix, deviceName = deviceName,
             name = form.name, title = form.title, company = form.company, email = mainEmail, extraEmails = extraEmails, website = form.website.trim(),
-            phone = mainPhone, extraPhones = extraPhones,
+            phone = mainPhone, extraPhones = extraPhones, officePhone = form.officePhone.trim(),
             address = form.address.trim(), state = form.state.trim(), country = form.country.trim(),
             customerType = form.customerType ?: "", marketExposure = form.marketExposure ?: "",
             products = form.products.joinToString("; "),
@@ -679,12 +695,14 @@ fun App() {
                             }
                             FormSection("Company & contact", Icons.Default.Business) {
                                 PaperField("Company", form.company, Icons.Default.Apartment, hint = fieldHints["company"], caps = KeyboardCapitalization.Words) { form = form.copy(company = it); fieldHints = fieldHints - "company" }
-                                PaperField("Phone", form.phone, Icons.Default.Phone, hint = fieldHints["phone"], keyboard = KeyboardType.Phone) { form = form.copy(phone = it.filter(Char::isDigit)); fieldHints = fieldHints - "phone" }
+                                PaperField(if (indianNumbers()) "Mobile" else "Phone", form.phone, Icons.Default.Phone, hint = fieldHints["phone"], keyboard = KeyboardType.Phone,
+                                    error = mobileErr(form.phone)) { form = form.copy(phone = typedMobile(it)); fieldHints = fieldHints - "phone" }
                                 // Extra numbers: filled when the card shows more than one, or added by hand (max MAX_PHONES in all).
                                 form.extraPhones.forEachIndexed { i, num ->
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        PaperField(EXTRA_PHONE_LABELS[i], num, Icons.Default.Call, Modifier.weight(1f), keyboard = KeyboardType.Phone) { v ->
-                                            form = form.copy(extraPhones = form.extraPhones.toMutableList().also { it[i] = v.filter(Char::isDigit) })
+                                        PaperField(if (indianNumbers()) EXTRA_PHONE_LABELS[i].replace("phone", "mobile") else EXTRA_PHONE_LABELS[i], num,
+                                            Icons.Default.Call, Modifier.weight(1f), keyboard = KeyboardType.Phone, error = mobileErr(num)) { v ->
+                                            form = form.copy(extraPhones = form.extraPhones.toMutableList().also { it[i] = typedMobile(v) })
                                         }
                                         IconButton({ form = form.copy(extraPhones = form.extraPhones.filterIndexed { j, _ -> j != i }) }) {
                                             Icon(Icons.Default.Close, "Remove ${EXTRA_PHONE_LABELS[i].lowercase()}", tint = Steel)
@@ -695,6 +713,9 @@ fun App() {
                                     LinkButton(if (form.extraPhones.isEmpty()) "+ Add secondary phone" else "+ Add another phone") {
                                         form = form.copy(extraPhones = form.extraPhones + "")
                                     }
+                                if (Brand.indianPhones)
+                                    PaperField("Office number", form.officePhone, Icons.Default.Business, keyboard = KeyboardType.Phone,
+                                        error = officeErr(form.officePhone)) { form = form.copy(officePhone = IndianPhone.typingOffice(it)) }
                                 PaperField("E-mail", form.email, Icons.Default.Email, hint = fieldHints["email"], keyboard = KeyboardType.Email, error = emailErr(form.email)) { form = form.copy(email = it); fieldHints = fieldHints - "email" }
                                 // Extra addresses: filled when the card shows more than one, or added by hand (max MAX_EMAILS in all).
                                 form.extraEmails.forEachIndexed { i, mail ->
@@ -732,7 +753,13 @@ fun App() {
                                         emailTried = true
                                         if ((listOf(form.email) + form.extraEmails).any { it.isNotBlank() && !ThankYou.isValidEmail(it) })
                                             scope.launch { snackbar.showSnackbar("Enter a valid e-mail address to continue") }
+                                        else if ((listOf(form.phone) + form.extraPhones).any { mobileErr(it) != null })
+                                            scope.launch { snackbar.showSnackbar("Mobile numbers must be 10 digits") }
+                                        else if (officeErr(form.officePhone) != null)
+                                            scope.launch { snackbar.showSnackbar("Enter the office number with its STD code") }
                                         else {
+                                            // tidy the office number into "0422 2673333"
+                                            if (indianNumbers()) IndianPhone.office(form.officePhone)?.let { form = form.copy(officePhone = it) }
                                             if (Brand.autoMarketExposure) marketFromCountry(form.country, appSettings.defaultCountry)
                                                 ?.let { form = form.copy(marketExposure = it) }
                                             screen = Screen.Customer

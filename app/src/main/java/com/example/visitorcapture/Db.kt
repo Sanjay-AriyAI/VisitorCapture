@@ -55,7 +55,9 @@ data class Visitor(
     val extraEmails: String = "",
     val website: String = "",            // company website from the card, e.g. www.example.com
     // secondary / third phone numbers joined with "; " (the main one is [phone])
-    val extraPhones: String = ""
+    val extraPhones: String = "",
+    // landline / office number, e.g. "0422 2673333" (LRT; empty elsewhere)
+    val officePhone: String = ""
 )
 
 /** The extra addresses as a list (see [Visitor.extraEmails]). */
@@ -261,7 +263,14 @@ val MIGRATION_11_12 = object : Migration(11, 12) {
     }
 }
 
-@Database(entities = [Visitor::class, Employee::class], version = 12, exportSchema = false)
+/** v12 -> v13: office (landline) number. Existing rows have none. */
+val MIGRATION_12_13 = object : Migration(12, 13) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE visitors ADD COLUMN `officePhone` TEXT NOT NULL DEFAULT ''")
+    }
+}
+
+@Database(entities = [Visitor::class, Employee::class], version = 13, exportSchema = false)
 abstract class AppDb : RoomDatabase() {
     abstract fun dao(): VisitorDao
     abstract fun employeeDao(): EmployeeDao
@@ -269,7 +278,7 @@ abstract class AppDb : RoomDatabase() {
         @Volatile private var inst: AppDb? = null
         fun get(c: Context): AppDb = inst ?: synchronized(this) {
             inst ?: Room.databaseBuilder(c.applicationContext, AppDb::class.java, "visitors.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13)
                 .build().also { inst = it }
         }
     }

@@ -19,7 +19,9 @@ object Sync {
         "AttendedBy", "AttendedByTitle", "AttendedByEmail", "AttendedByPhone", "AttendedByKey",
         "LeadOutcome", "DiscussionNotes", "Remarks", "RemarksOther",
         "FollowUpAction", "FollowUpDate", "FollowUpAtMs", "FollowUpNote", "Photo", "HandwrittenNotes",
-        "FactoryVisitDate", "FactoryVisitAtMs", "FactoryReminder", "FollowUpReminder", "PhotoBack", "ExtraEmails", "Website", "ExtraPhones")
+        "FactoryVisitDate", "FactoryVisitAtMs", "FactoryReminder", "FollowUpReminder", "PhotoBack", "ExtraEmails", "Website", "ExtraPhones") +
+        // LRT records an office landline; the other companies keep their original columns.
+        (if (Brand.indianPhones) listOf("OfficePhone") else emptyList())
 
     private fun q(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
 
@@ -68,7 +70,7 @@ object Sync {
         }
         section("Visitor", listOf("Lead ID" to v.uid, "Visited at" to at.format(Date(v.createdAt)),
             "Name" to v.name, "Title" to v.title, "Company" to v.company, "Phone" to v.phone,
-            "Secondary phone" to v.extraPhoneList().getOrElse(0) { "" }, "Third phone" to v.extraPhoneList().getOrElse(1) { "" }, "E-mail" to v.email,
+            "Secondary phone" to v.extraPhoneList().getOrElse(0) { "" }, "Third phone" to v.extraPhoneList().getOrElse(1) { "" }, "Office number" to v.officePhone, "E-mail" to v.email,
             "Secondary e-mail" to v.extraEmailList().getOrElse(0) { "" }, "Third e-mail" to v.extraEmailList().getOrElse(1) { "" }, "Website" to v.website,
             "Address" to v.address, "State" to v.state, "Country" to v.country))
         section("Profile & interest", listOf("Customer type" to v.customerType, "Market exposure" to v.marketExposure,
@@ -96,7 +98,7 @@ object Sync {
         val sb = StringBuilder(HEADERS.joinToString(",")).append("\n")
         list.forEach { v ->
             val at = Date(v.createdAt)
-            sb.append(listOf(v.uid, v.deviceName, dateFmt.format(at), timeFmt.format(at), isoFmt.format(at), v.createdAt.toString(),
+            sb.append((listOf(v.uid, v.deviceName, dateFmt.format(at), timeFmt.format(at), isoFmt.format(at), v.createdAt.toString(),
                 v.name, v.title, v.company, v.phone, v.email, v.address, v.state, v.country,
                 v.customerType, v.marketExposure, v.products, v.otherDetail, v.additionalInterest,
                 v.attendedByName, v.attendedByTitle, v.attendedByEmail, v.attendedByPhone, v.attendedByKey,
@@ -108,7 +110,8 @@ object Sync {
                 if (v.factoryVisitAt > 0) followFmt.format(Date(v.factoryVisitAt)) else "",
                 if (v.factoryVisitAt > 0) v.factoryVisitAt.toString() else "",
                 v.factoryReminderStatus, v.followUpReminderStatus,
-                if (hasBackPhoto(v)) cardBackEntry(v) else "", v.extraEmails, v.website, v.extraPhones).joinToString(",") { q(it) }).append("\n")
+                if (hasBackPhoto(v)) cardBackEntry(v) else "", v.extraEmails, v.website, v.extraPhones) +
+                (if (Brand.indianPhones) listOf(v.officePhone) else emptyList())).joinToString(",") { q(it) }).append("\n")
         }
         return sb.toString()
     }
@@ -241,7 +244,7 @@ object Sync {
                 .mapNotNull { p -> leadFiles[p] ?: p.substringAfterLast('/').takeIf { it.matches(NOTE_NAME) }?.let { File(cards, it) } }
                 .filter { it.exists() }.joinToString("|") { it.absolutePath }
             val v = Visitor(uid = uid, deviceName = g(r, "Device"), name = g(r, "Name"), title = g(r, "Title"),
-                company = g(r, "Company"), email = g(r, "Email"), extraEmails = g(r, "ExtraEmails"), website = g(r, "Website"), phone = g(r, "Phone"), extraPhones = g(r, "ExtraPhones"),
+                company = g(r, "Company"), email = g(r, "Email"), extraEmails = g(r, "ExtraEmails"), website = g(r, "Website"), phone = g(r, "Phone"), extraPhones = g(r, "ExtraPhones"), officePhone = g(r, "OfficePhone"),
                 address = g(r, "Address"), state = g(r, "State"), country = g(r, "Country"),
                 customerType = g(r, "CustomerType"), marketExposure = g(r, "MarketExposure"), products = g(r, "Products"), otherDetail = g(r, "OtherDetail"),
                 additionalInterest = g(r, "AdditionalInterest"), notePhotoPaths = notes,

@@ -79,7 +79,7 @@ fun VisitorLogScreen(
     val matchesView: (Visitor) -> Boolean = remember(query, filter) {
         val q = query.trim().lowercase()
         val match: (Visitor) -> Boolean = { v -> filter.matches(v, today) && (q.isEmpty() ||
-            listOf(v.name, v.company, v.email, v.extraEmails, v.phone, v.extraPhones, v.title).any { it.lowercase().contains(q) }) }
+            listOf(v.name, v.company, v.email, v.extraEmails, v.phone, v.extraPhones, v.officePhone, v.title).any { it.lowercase().contains(q) }) }
         match
     }
     val shown = remember(inRange, matchesView) { inRange.filter(matchesView) }
@@ -363,6 +363,7 @@ private fun VisitorCard(v: Visitor, fmt: SimpleDateFormat, expanded: Boolean, on
             Column(Modifier.padding(top = 12.dp, end = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 HorizontalDivider(color = LineC.copy(alpha = 0.08f))
                 Detail("Contact", (listOf(v.email) + v.extraEmailList() + v.phone + v.extraPhoneList()).filter { it.isNotBlank() }.joinToString(" · "))
+                Detail("Office number", v.officePhone)
                 Detail("Website", v.website)
                 Detail("Address", listOf(v.address, v.state, v.country).filter { it.isNotBlank() }.joinToString(", "))
                 Detail("Products", Catalog.summarize(v.products.split("; ").filter { it.isNotBlank() }))
@@ -435,6 +436,7 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
     var website by remember { mutableStateOf(v.website) }
     var phone by remember { mutableStateOf(v.phone) }
     var extraPhones by remember { mutableStateOf(v.extraPhoneList()) }
+    var office by remember { mutableStateOf(v.officePhone) }
     var address by remember { mutableStateOf(v.address) }
     var state by remember { mutableStateOf(v.state) }
     var country by remember { mutableStateOf(v.country) }
@@ -463,6 +465,7 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
         val newFactory = if (Reminder.FACTORY.outcome in outcomes) factoryAt else 0L
         val newFollow = if (Brand.followUpOnDone || Reminder.FOLLOW_UP.outcome in outcomes) followAt else 0L
         val edited = v.copy(name = name.trim(), title = title.trim(), company = company.trim(), email = mail, extraEmails = extras, website = website.trim(), phone = mainPhone, extraPhones = morePhones,
+            officePhone = IndianPhone.office(office) ?: office.trim(),
             address = address.trim(), state = state.trim(), country = country.trim(),
             customerType = customerType, marketExposure = market, otherDetail = other.trim(),
             additionalInterest = interest.trim(),
@@ -527,6 +530,7 @@ fun EditVisitorDialog(v: Visitor, onDismiss: () -> Unit, onSave: (Visitor) -> Un
                 }
                 if (extraPhones.size < MAX_PHONES - 1)
                     LinkButton(if (extraPhones.isEmpty()) "+ Add secondary phone" else "+ Add another phone") { extraPhones = extraPhones + "" }
+                if (Brand.indianPhones || v.officePhone.isNotBlank()) field("Office number", office) { office = it }
                 field("Address", address, true) { address = it }
                 field("State", state) { state = it }
                 field("Country", country) { country = it }

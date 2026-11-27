@@ -52,6 +52,7 @@ object Brand : BrandSpec {
     // ---- LRT visit flow ----
     override val customerTypes = listOf("Customer", "Agent", "Supplier", "Others")
     override val autoMarketExposure = true
+    override val indianPhones = true
     override val productsHint = "Tap every product the visitor is interested in, then describe the requirement."
     override val describeAnyProduct = true
     override val leadOutcomes = listOf("Sample Request", "Complaint", "Request for Visit", "General Enquiry")
