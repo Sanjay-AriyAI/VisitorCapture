@@ -68,6 +68,8 @@ interface BrandSpec {
     val mailShowsVisitDescription: Boolean get() = false
     /** Colours of the thank-you and reminder mails. */
     val mailColors: MailColors get() = MailColors()
+    /** Logo in the mail header for a visitor who picked these top-level [products] (PNG). Default: always [logo]. */
+    @DrawableRes fun mailLogo(products: Set<String>): Int? = logo
 }
 
 /**

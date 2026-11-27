@@ -438,10 +438,20 @@ object ThankYou {
         return mixed
     }
 
-    /** Company logo for the mail header, or null if it can't be read (the mail then shows the company name instead). */
-    fun loadLogo(ctx: Context): ByteArray? = try {
-        Brand.logo?.let { id -> ctx.resources.openRawResource(id).use { it.readBytes() } }
+    /** Drawable for [v]'s mail header: depends on the products they picked (see [BrandSpec.mailLogo]). */
+    fun mailLogoId(v: Visitor): Int? = Brand.mailLogo(
+        v.products.split("; ").map { it.trim().substringBefore(" > ") }.filter { it.isNotBlank() }.toSet())
+
+    /** Logo PNG bytes for the mail header, or null if it can't be read (the mail then shows the company name instead). */
+    fun loadLogo(ctx: Context, id: Int?): ByteArray? = try {
+        id?.let { ctx.resources.openRawResource(it).use { s -> s.readBytes() } }
     } catch (e: Exception) { null }
+
+    /** Reads each logo once per run, however many visitors share it. */
+    class LogoCache(private val ctx: Context) {
+        private val bytes = HashMap<Int, ByteArray?>()
+        fun forVisitor(v: Visitor): ByteArray? = mailLogoId(v)?.let { id -> bytes.getOrPut(id) { loadLogo(ctx, id) } }
+    }
 
     /** Blocking SMTP send; throws javax.mail.MessagingException on any failure. */
     fun send(c: SmtpSettings, v: Visitor, logo: ByteArray? = null, updated: Boolean = false) {

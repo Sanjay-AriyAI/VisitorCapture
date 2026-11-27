@@ -24,11 +24,11 @@ class ThankYouWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
         val dao = AppDb.get(applicationContext).dao()
         var retry = false
         val queued = dao.queuedThankYou()
-        val logo = if (queued.isNotEmpty()) ThankYou.loadLogo(applicationContext) else null   // read once per run
+        val logos = ThankYou.LogoCache(applicationContext)   // each logo read once per run
         for (v in queued) {
             if (!ThankYou.isValidEmail(v.email)) { dao.setThankYouStatus(v.uid, ThankYou.FAILED); continue }
             try {
-                ThankYou.send(cfg, v, logo, updated = ThankYou.isUpdate(v))   // mailed before: "updated, final version" mail
+                ThankYou.send(cfg, v, logos.forVisitor(v), updated = ThankYou.isUpdate(v))   // mailed before: "updated, final version" mail
                 dao.markThankYou(v.uid, ThankYou.SENT, System.currentTimeMillis())
             } catch (e: AddressException) {
                 dao.setThankYouStatus(v.uid, ThankYou.FAILED)

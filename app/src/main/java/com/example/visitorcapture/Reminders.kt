@@ -118,14 +118,13 @@ class ReminderWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(c
         val dao = AppDb.get(applicationContext).dao()
         val now = System.currentTimeMillis()
         var retry = false
-        var logo: ByteArray? = null
+        val logos = ThankYou.LogoCache(applicationContext)
         for (v in dao.scheduledReminders()) for (kind in Reminder.values()) {
             val at = kind.at(v)
             if (kind.status(v) != Reminder.SCHEDULED || !Reminder.isDue(at, now)) continue
             if (at <= now) { kind.setStatus(dao, v.uid, Reminder.EXPIRED); continue }   // too late to remind anyone
             try {
-                if (logo == null) logo = ThankYou.loadLogo(applicationContext)
-                ReminderMail.send(cfg, v, kind, logo)
+                ReminderMail.send(cfg, v, kind, logos.forVisitor(v))
                 kind.setStatus(dao, v.uid, Reminder.SENT)
             } catch (e: AddressException) {
                 kind.setStatus(dao, v.uid, Reminder.FAILED)
